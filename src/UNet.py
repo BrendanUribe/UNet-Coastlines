@@ -23,7 +23,7 @@ class DoubleConv(nn.Module): # recognize this part as a neural network (pytorch)
 
 
 class UNet(nn.Module): # main unet model
-    def __init__(self, in_channels=3, out_channels=1): # initialize again 3 channels for rgb and 1 input for BW, one grayscale mask (land and water) maybe can add cloud mask?
+    def __init__(self, in_channels=3, num_classes=3): # input channels (3 for rgb), output channels (3 for rgb), num_classes (3 for rgb)
         super().__init__() # initialize pytorch structure
 
         # Encoder - downsampling side that extracts features while reducing image size rbg input, 64 feature maps output, then 128, then 256
@@ -47,9 +47,13 @@ class UNet(nn.Module): # main unet model
         self.up1 = nn.ConvTranspose2d(128, 64, 2, stride=2)
         self.dec1 = DoubleConv(128, 64)
 
+        # second 'head' for learning land/water/cloud and coastlines
+        self.seg_head = nn.Conv2d(64, num_classes, kernel_size=1) # final output mask for segmentation
+        self.edge_head = nn.Conv2d(64, 1, kernel_size=1) # final output mask for edge detection
+
         # Output - converts final 64 feature maps to desired... 1 masked image
         # each pixel is 1 predicted value (land/water)
-        self.final = nn.Conv2d(64, out_channels, kernel_size=1)
+        # self.final = nn.Conv2d(64, out_channels, kernel_size=1) *removed since now have 2 headed approach
 
     def forward(self, x):
         # Encoder - first second and third encoder blocks for downsampling 
@@ -73,4 +77,8 @@ class UNet(nn.Module): # main unet model
         d1 = torch.cat([d1, e1], dim=1)
         d1 = self.dec1(d1)
 
-        return self.final(d1) # final output mask
+        # return self.final(d1) # final output mask * removed since now have 2 headed approach
+        seg_out = self.seg_head(d1) # segmentation output
+        edge_out = self.edge_head(d1) # edge detection output
+
+        return seg_out, edge_out # return both outputs
