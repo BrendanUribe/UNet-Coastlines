@@ -46,7 +46,7 @@ model.load_state_dict(torch.load("unet_256_100ep_2headed_2025-XX-XX.pth", map_lo
 model.eval() # evaluation mode for predicting not training
 
 # Load image can change number to desired image can see where it worked well where it didnt
-img_path = "dataset/images/earth_img_3.png"
+img_path = "dataset/images/earth_img_2.png"
 image = Image.open(img_path).convert("RGB") # this one is rgb image
 
 transform = T.Compose([
@@ -126,3 +126,4 @@ plt.axis("off")
 
 
 plt.show()
+
