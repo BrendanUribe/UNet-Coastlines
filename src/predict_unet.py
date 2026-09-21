@@ -61,6 +61,10 @@ total_time = time.time() - total_start
 print(f"\nModel inference time: {model_time:.4f} sec")
 print(f"Total prediction time: {total_time:.4f} sec\n")
 
+# build an RGB overlay: the original image with predicted coastline pixels painted bright red
+coastline_overlay = image_plot.copy()
+coastline_overlay[edge_mask_clean > 0] = [1.0, 0.0, 0.0]
+
 # Plot results
 plt.figure(figsize=(16, 4))
 
@@ -72,6 +76,16 @@ plt.axis("off")
 plt.subplot(1, 4, 2)
 plt.title("Predicted Land/Water/Cloud")
 plt.imshow(seg_pred, cmap="viridis", vmin=0, vmax=2)
+plt.axis("off")
+
+plt.subplot(1, 4, 3)
+plt.title("Predicted Coastline (edge head)")
+plt.imshow(edge_mask_clean, cmap="gray")
+plt.axis("off")
+
+plt.subplot(1, 4, 4)
+plt.title("Coastline over RGB")
+plt.imshow(coastline_overlay)
 plt.axis("off")
 
 
