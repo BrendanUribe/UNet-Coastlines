@@ -73,7 +73,7 @@ with torch.inference_mode():
 
     seg_pred = torch.argmax(seg_out, dim=1).squeeze().cpu().numpy()
 
-    edge_prob = torch.sigmoid(edge_outputs[-1]).squeeze().cpu().numpy()   # [-1] = the fused output; stays continuous 0-1, no threshold yet
+    edge_prob = torch.sigmoid(edge_outputs).squeeze().cpu().numpy()   # stays as continuous 0-1 values, no threshold yet
 
 model_time = time.time() - model_start
 
