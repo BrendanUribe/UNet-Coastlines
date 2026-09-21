@@ -1,5 +1,6 @@
-import torch # py torch deep learning library 
+import torch # py torch deep learning library
 import torch.nn as nn # neural network tools
+import torch.nn.functional as F # needed for F.interpolate (upsampling the multi-scale edge outputs)
 
 # double convolution block for UNet
 class DoubleConv(nn.Module): # recognize this part as a neural network (pytorch)

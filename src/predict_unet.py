@@ -14,7 +14,7 @@ def non_max_suppress_thin(edge_prob):
     gy = cv2.Sobel(edge_prob, cv2.CV_64F, 0, 1, ksize=3)
     angle = (np.arctan2(gy, gx) * 180.0 / np.pi) % 180.0
 
-    H. W = edge_prob.shape
+    H, W = edge_prob.shape
     thinned = np.zeros_like(edge_prob)
 
     for i in range(1, H - 1):
@@ -73,7 +73,7 @@ with torch.inference_mode():
 
     seg_pred = torch.argmax(seg_out, dim=1).squeeze().cpu().numpy()
 
-    edge_prob = torch.sigmoid(edge_outputs).squeeze().cpu().numpy()   # stays as continuous 0-1 values, no threshold yet
+    edge_prob = torch.sigmoid(edge_outputs[-1]).squeeze().cpu().numpy()   # [-1] = the fused output; stays continuous 0-1, no threshold yet
 
 model_time = time.time() - model_start
 
