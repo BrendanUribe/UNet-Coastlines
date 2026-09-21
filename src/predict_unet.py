@@ -6,6 +6,7 @@ import cv2 # open cv for edge detection
 import numpy as np # math, ioU, Dice
 import time  # timer
 from UNet import UNet # unet model
+from matplotlib import cm
 
 
 def non_max_suppress_thin(edge_prob):
@@ -73,13 +74,19 @@ with torch.inference_mode():
 
     seg_pred = torch.argmax(seg_out, dim=1).squeeze().cpu().numpy()
 
-    edge_prob = torch.sigmoid(edge_outputs).squeeze().cpu().numpy()   # stays as continuous 0-1 values, no threshold yet
+    edge_prob = torch.sigmoid(edge_outputs[-1]).squeeze().cpu().numpy()   # stays as continuous 0-1 values, no threshold yet
 
 model_time = time.time() - model_start
 
 # Suppress edge predictions that fall inside predicted cloud regions, BEFORE thinning
 cloud_pixels = (seg_pred == 2)
 edge_prob[cloud_pixels] = 0
+
+background_pixels = (image_plot.mean(axis=2) < 0.02)  # very dark pixels, background/space
+norm = plt.Normalize(vmin=0, vmax=2)
+seg_display = cm.viridis(norm(seg_pred))
+seg_display[background_pixels] = [0.12, 0.12, 0.12, 1.0]   # force background to neutral gray
+edge_prob[background_pixels] = 0
 
 edge_thin_prob = non_max_suppress_thin(edge_prob)   # NMS runs on the continuous probability map
 edge_thin = (edge_thin_prob > 0.5).astype(np.float32)   # threshold happens LAST
@@ -103,7 +110,7 @@ plt.axis("off")
 
 plt.subplot(1, 4, 2)
 plt.title("Predicted Land/Water/Cloud")
-plt.imshow(seg_pred, cmap="viridis", vmin=0, vmax=2)
+plt.imshow(seg_display)
 plt.axis("off")
 
 plt.subplot(1, 4, 3)
