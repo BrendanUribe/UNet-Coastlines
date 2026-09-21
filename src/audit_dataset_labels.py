@@ -117,8 +117,8 @@ for idx, img_name in enumerate(image_files):
     count_background += background_mask.sum()
     count_true_water += true_water_mask.sum()
 
-    rgb_sum_water += image_np[final_water_mask].sum(axis=0)
-    rgb_count_water += final_water_mask.sum()
+    rgb_sum_water += image_np[true_water_mask].sum(axis=0)
+    rgb_count_water += true_water_mask.sum()
     rgb_sum_land += image_np[final_land_mask].sum(axis=0)
     rgb_count_land += final_land_mask.sum()
     rgb_sum_cloud += image_np[final_cloud_mask].sum(axis=0)
@@ -167,7 +167,7 @@ recommended = {k: v / total_inv_sqrt * 3 for k, v in inv_sqrt.items()}
 print(f"\n  Recommended class_weights (paste into losses.py):")
 print(f"  torch.tensor([{recommended['water']:.3f}, {recommended['land']:.3f}, {recommended['cloud']:.3f}])  # water, land, cloud")
 
-print("\n=== Average RGB per class (non-cloud pixels only for water/land) ===")
+print("\n=== Average RGB per class (non-cloud pixels only for water/land; water excludes background) ===")
 if rgb_count_water > 0:
     r, g, b = rgb_sum_water / rgb_count_water
     print(f"  water-labeled pixels: R={r:.3f} G={g:.3f} B={b:.3f}  {'(blue-dominant, looks like water - good)' if b > r and b > g else '(NOT blue-dominant - mask convention may be WRONG)'}")

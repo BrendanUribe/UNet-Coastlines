@@ -2,12 +2,11 @@ import torch
 import torch.nn as nn
 
 def combined_loss(seg_out, edge_out, seg_label, edge_label, cloud_label):
-    # NOTE: these were sqrt-inverse-frequency weights computed from raw water/land/cloud
-    # pixel counts (~87%/4%/9%). The label audit showed most of that "water" mass is actually
-    # black background/space, not ocean (now excluded via ignore_index below) - so these
-    # weights are still calibrated against the WRONG frequencies and should be recomputed
-    # from audit_dataset_labels.py once it reports frequency excluding background pixels.
-    class_weights = torch.tensor([0.312, 1.657, 1.031]).to(seg_out.device)
+    # sqrt-inverse-frequency weights computed from the REAL dataset, background excluded
+    # (water 43.7% / land 17.4% / cloud 38.9%, via audit_dataset_labels.py) - much milder
+    # than the original 28x-imbalanced weights, since most of that imbalance turned out to
+    # be background space rather than a real difference between water/land/cloud
+    class_weights = torch.tensor([0.824, 1.304, 0.873]).to(seg_out.device)
     # ignore_index=-100 skips background/space pixels entirely (see coastline_dataset.py's
     # IGNORE_INDEX) instead of counting them as "water" - they were diluting the water class's
     # gradient signal with millions of trivial black pixels instead of real ocean examples
