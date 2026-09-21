@@ -15,13 +15,24 @@ def combined_loss(seg_out, edge_out, seg_label, edge_label, cloud_label):
 
     edge_criterion = nn.BCEWithLogitsLoss(
         reduction='none',
-        pos_weight=torch.tensor([31.2]).to(edge_out.device)
+        pos_weight=torch.tensor([5.6]).to(edge_out.device)
     )
+
+    def dice_loss(pred, target, smooth=1e-6):
+        pred = torch.sigmoid(pred)
+        intersection = (pred_prob * target).sum() # How much it overlaps with the target
+        return 1 - (2. * intersection + smooth) / (pred_prob.sum() + target.sum() + smooth)
+
     edge_loss_raw = edge_criterion(edge_out.squeeze(1), edge_label)
 
+    edge_prob = torch.sigmoid(edge_out.squeeze(1))
     valid_mask = (cloud_label == 0).float()
-    edge_loss = (edge_loss_raw * valid_mask).sum() / valid_mask.sum().clamp(min=1)
 
-    total_loss = seg_loss + edge_loss
+    bce = (edge_loss_raw * valid_mask).sum() / valid_mask.sum().clamp(min=1)
+    dice = dice_loss(edge_prob * valid_mask, edge_label * valid_mask)
+
+    edge_loss = bce + dice
+
+    total_loss = seg_loss + edge_loss 
 
     return total_loss, seg_loss, edge_loss

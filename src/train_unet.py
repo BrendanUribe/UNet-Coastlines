@@ -35,7 +35,7 @@ model = UNet(in_channels=3, num_classes=3).to(device) # changed output classes t
 optimizer = optim.Adam(model.parameters(), lr=5e-5) # updates model weights adam is common  lr for learning rate small rate = slower but more stable
 
 # Training loop
-epochs = 100 # model passes thru all training images this many times - can change
+epochs = 50 # model passes thru all training images this many times - can change
 
 #  TOTAL TIMER START
 total_start_time = time.time()
@@ -52,10 +52,10 @@ for epoch in range(epochs):
         edge_labels = edge_labels.to(device)
         cloud_labels = cloud_labels.to(device)
 
-        seg_out, edge_out = model(images)
+        seg_out, edge_outputs = model(images)
 
         total_loss, seg_loss, edge_loss = combined_loss(
-            seg_out, edge_out, seg_labels, edge_labels, cloud_labels
+            seg_out, edge_outputs, seg_labels, edge_labels, cloud_labels
         )
 
         optimizer.zero_grad()

@@ -49,7 +49,11 @@ class UNet(nn.Module): # main unet model
 
         # second 'head' for learning land/water/cloud and coastlines
         self.seg_head = nn.Conv2d(64, num_classes, kernel_size=1) # final output mask for segmentation
-        self.edge_head = nn.Conv2d(64, 1, kernel_size=1) # final output mask for edge detection
+
+        self.edge_head_d3 = nn.Conv2d(256, 1, kernel_size=1) # coarse final output mask for edge detection at decoder level 3
+        self.edge_head_d2 = nn.Conv2d(128, 1, kernel_size=1) # medium final output mask for edge detection at decoder level 2
+        self.edge_head_d1 = nn.Conv2d(64, 1, kernel_size=1) # fine final output mask for edge detection at decoder level 1
+        self.edge_fuse = nn.Conv2d(3, 1, kernel_size=1) # fuse the three edge outputs into a single edge output
 
         # Output - converts final 64 feature maps to desired... 1 masked image
         # each pixel is 1 predicted value (land/water)
@@ -79,6 +83,15 @@ class UNet(nn.Module): # main unet model
 
         # return self.final(d1) # final output mask * removed since now have 2 headed approach
         seg_out = self.seg_head(d1) # segmentation output
-        edge_out = self.edge_head(d1) # edge detection output
 
-        return seg_out, edge_out # return both outputs
+        edge_d3 = self.edge_head_d3(d3)   # (B, 1, 64, 64) 
+        edge_d2 = self.edge_head_d2(d2)   # (B, 1, 128, 128)
+        edge_d1 = self.edge_head_d1(d1)   # (B, 1, 256, 256)
+
+        target_size = edge_d1.shape[-2:]
+        edge_d3_up = F.interpolate(edge_d3, size=target_size, mode='bilinear', align_corners=False)
+        edge_d2_up = F.interpolate(edge_d2, size=target_size, mode='bilinear', align_corners=False)
+
+        edge_fused = self.edge_fuse(torch.cat([edge_d3_up, edge_d2_up, edge_d1], dim=1)) # fuse the three edge outputs into a single edge output
+
+        return seg_out, [edge_d3_up, edge_d2_up, edge_d1, edge_fused] # return both outputs
