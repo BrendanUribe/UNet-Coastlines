@@ -30,6 +30,7 @@ CLOUD_MASK_DIR = "dataset/cloud masks"
 IMG_SIZE = (256, 256)
 N_SAMPLE_PANELS = 8  # how many side-by-side images to save for manual inspection
 OUT_DIR = "label_audit_samples"
+BACKGROUND_BRIGHTNESS_THRESHOLD = 0.02  # must match coastline_dataset.py's IGNORE_INDEX threshold
 
 image_transform = T.Compose([T.Resize(IMG_SIZE), T.ToTensor()])
 mask_transform = T.Compose([
@@ -55,6 +56,9 @@ count_land_raw = 0   # land_water_bin == 1
 
 water_hidden_by_cloud = 0  # true water (raw) that cloud mask overwrote
 land_hidden_by_cloud = 0   # true land (raw) that cloud mask overwrote
+
+count_background = 0   # final "water" pixels that are actually near-black empty space
+count_true_water = 0   # final "water" pixels that are real, visible ocean
 
 # color accumulators: sum of RGB values + pixel count, per class, restricted to
 # NON-cloud pixels for water/land so cloud doesn't contaminate the color signal
@@ -107,6 +111,12 @@ for idx, img_name in enumerate(image_files):
     count_land_final += final_land_mask.sum()
     count_cloud_final += final_cloud_mask.sum()
 
+    brightness = image_np.mean(axis=2)  # (H, W)
+    background_mask = final_water_mask & (brightness < BACKGROUND_BRIGHTNESS_THRESHOLD)
+    true_water_mask = final_water_mask & ~background_mask
+    count_background += background_mask.sum()
+    count_true_water += true_water_mask.sum()
+
     rgb_sum_water += image_np[final_water_mask].sum(axis=0)
     rgb_count_water += final_water_mask.sum()
     rgb_sum_land += image_np[final_land_mask].sum(axis=0)
@@ -133,6 +143,29 @@ print(f"  cloud: {count_cloud_final/total_pixels*100:.1f}%")
 print("\n=== How much true water/land gets hidden by the cloud mask ===")
 print(f"  {water_hidden_by_cloud/max(count_water_raw,1)*100:.1f}% of raw water pixels overwritten to 'cloud'")
 print(f"  {land_hidden_by_cloud/max(count_land_raw,1)*100:.1f}% of raw land pixels overwritten to 'cloud'")
+
+pct_background_of_water = count_background / max(count_water_final, 1) * 100
+print(f"\n=== How much of 'water' is actually empty background space, not ocean ===")
+print(f"  {pct_background_of_water:.1f}% of pixels labeled 'water' are near-black (brightness < {BACKGROUND_BRIGHTNESS_THRESHOLD}) - likely background, not real ocean")
+print(f"  (this is what coastline_dataset.py's IGNORE_INDEX now excludes from training)")
+
+# corrected frequency: same denominator, but true_water instead of water_final, background dropped entirely
+total_non_background = total_pixels - count_background
+print("\n=== Corrected pixel-class frequency (background excluded, matches what the model now actually trains on) ===")
+pct_true_water = count_true_water / total_non_background * 100
+pct_land = count_land_final / total_non_background * 100
+pct_cloud = count_cloud_final / total_non_background * 100
+print(f"  water: {pct_true_water:.1f}%")
+print(f"  land:  {pct_land:.1f}%")
+print(f"  cloud: {pct_cloud:.1f}%")
+
+# recommended sqrt-inverse-frequency weights from the CORRECTED numbers, normalized to sum=3
+freqs = {"water": pct_true_water / 100, "land": pct_land / 100, "cloud": pct_cloud / 100}
+inv_sqrt = {k: 1 / (v ** 0.5) for k, v in freqs.items() if v > 0}
+total_inv_sqrt = sum(inv_sqrt.values())
+recommended = {k: v / total_inv_sqrt * 3 for k, v in inv_sqrt.items()}
+print(f"\n  Recommended class_weights (paste into losses.py):")
+print(f"  torch.tensor([{recommended['water']:.3f}, {recommended['land']:.3f}, {recommended['cloud']:.3f}])  # water, land, cloud")
 
 print("\n=== Average RGB per class (non-cloud pixels only for water/land) ===")
 if rgb_count_water > 0:

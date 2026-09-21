@@ -7,7 +7,17 @@ import cv2 # image processing
 import numpy as np # array processing
 import torch
 
-# test to prove python can pair data 
+# test to prove python can pair data
+
+# the land/water mask labels background/space the same as water (both "not land"), but the
+# label-audit script showed avg water-labeled RGB is near-black (~0.04) - i.e. most of what's
+# labeled "water" is actually empty space around the Earth disc, not real ocean, since space
+# vastly outnumbers real ocean pixels in these renders. Training on that as "water" mostly
+# teaches the model to recognize black space, diluting the signal for what real ocean looks
+# like. IGNORE_INDEX marks those pixels so the loss skips them entirely instead of counting
+# them as water.
+IGNORE_INDEX = -100  # matches nn.CrossEntropyLoss's default ignore_index
+BACKGROUND_BRIGHTNESS_THRESHOLD = 0.02  # mean RGB below this = treated as empty space, not ocean
 
 
 class CoastlineDataset(Dataset): # create a dataset called coaslinedataset
@@ -82,6 +92,11 @@ class CoastlineDataset(Dataset): # create a dataset called coaslinedataset
 
         seg_label = land_water_bin.squeeze(0).long()
         seg_label[cloud_bin.squeeze(0) > 0.5] = 2
+
+        # exclude black background/space pixels from the loss - see IGNORE_INDEX comment above
+        brightness = image.mean(dim=0)  # (H, W), averaged over RGB channels
+        is_background = (land_water_bin.squeeze(0) == 0) & (cloud_bin.squeeze(0) == 0) & (brightness < BACKGROUND_BRIGHTNESS_THRESHOLD)
+        seg_label[is_background] = IGNORE_INDEX
 
         lw_np = land_water_bin.squeeze(0).numpy().astype(np.uint8)
         edge_np = self.make_edge_mask(lw_np)
