@@ -1,19 +1,11 @@
-import torch
+import torch 
 from PIL import Image # image opening
 import torchvision.transforms as T # preprocessing tools for resizing and converting images to tensors
 import matplotlib.pyplot as plt # plotting
-from matplotlib import cm # for manually compositing the segmentation colormap
 import cv2 # open cv for edge detection
 import numpy as np # math, ioU, Dice
-from skimage.morphology import skeletonize # thins a blobby binary mask down to a 1px-wide centerline
 import time  # timer
 from UNet import UNet # unet model
-
-# must match coastline_dataset.py's BACKGROUND_BRIGHTNESS_THRESHOLD - the model gets zero
-# training signal on these pixels (see IGNORE_INDEX), so its prediction there is arbitrary
-# noise, not a real answer. Recompute the same mask directly from the image at inference
-# time instead of trusting whatever class the model happened to guess.
-BACKGROUND_BRIGHTNESS_THRESHOLD = 0.02
 
 print("STARTED")
 
@@ -59,37 +51,19 @@ with torch.inference_mode():
 
 model_time = time.time() - model_start
 
-# background pixels (empty space around the Earth disc) were excluded from training via
-# IGNORE_INDEX, so the model was never taught what to output there - its raw prediction on
-# them is arbitrary and was bleeding fake "coastline" into the edge output. Recompute the
-# same near-black brightness test used during training, directly from the input image.
-background_pixels = (image_plot.mean(axis=2) < BACKGROUND_BRIGHTNESS_THRESHOLD)
-
-# Suppress edge predictions that fall inside predicted cloud regions OR background space
+# Suppress edge predictions that fall inside predicted cloud regions
 cloud_pixels = (seg_pred == 2)
 edge_mask_clean = edge_mask.copy()
 edge_mask_clean[cloud_pixels] = 0
-edge_mask_clean[background_pixels] = 0
-
-# the raw thresholded edge mask is a blobby region wherever edge_prob > 0.5, not a clean
-# boundary - skeletonize collapses it down to a 1-pixel-wide centerline so it actually reads
-# as a coastline instead of a filled mask
-edge_thin = skeletonize(edge_mask_clean.astype(bool)).astype(np.float32)
 
 total_time = time.time() - total_start
 
 print(f"\nModel inference time: {model_time:.4f} sec")
 print(f"Total prediction time: {total_time:.4f} sec\n")
 
-# build a segmentation display where background pixels are forced to a neutral dark gray,
-# regardless of whatever (untrained, meaningless) class the model guessed there
-norm = plt.Normalize(vmin=0, vmax=2)
-seg_display = cm.viridis(norm(seg_pred))
-seg_display[background_pixels] = [0.12, 0.12, 0.12, 1.0]
-
-# build an RGB overlay: the original image with the thin predicted coastline painted bright red
+# build an RGB overlay: the original image with predicted coastline pixels painted bright red
 coastline_overlay = image_plot.copy()
-coastline_overlay[edge_thin > 0] = [1.0, 0.0, 0.0]
+coastline_overlay[edge_mask_clean > 0] = [1.0, 0.0, 0.0]
 
 # Plot results
 plt.figure(figsize=(16, 4))
@@ -101,12 +75,12 @@ plt.axis("off")
 
 plt.subplot(1, 4, 2)
 plt.title("Predicted Land/Water/Cloud")
-plt.imshow(seg_display)
+plt.imshow(seg_pred, cmap="viridis", vmin=0, vmax=2)
 plt.axis("off")
 
 plt.subplot(1, 4, 3)
-plt.title("Predicted Coastline (thin, edge head)")
-plt.imshow(edge_thin, cmap="gray")
+plt.title("Predicted Coastline (edge head)")
+plt.imshow(edge_mask_clean, cmap="gray")
 plt.axis("off")
 
 plt.subplot(1, 4, 4)
