@@ -102,6 +102,9 @@ def main():
     ap.add_argument("--device", default=None)
     ap.add_argument("--save", default=None, help="write the figure here instead of showing it")
     ap.add_argument("--no-show", action="store_true")
+    ap.add_argument("--sweep", action="store_true",
+                    help="render the coastline channel at a range of thresholds; "
+                         "use it to find the operating point before retraining")
     args = ap.parse_args()
 
     device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
@@ -139,6 +142,26 @@ def main():
     if args.no_show or args.save:
         matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+
+    if args.sweep:
+        thresholds = [0.5, 0.7, 0.85, 0.95, 0.99]
+        fig, axes = plt.subplots(1, len(thresholds) + 1, figsize=(4 * (len(thresholds) + 1), 4.5))
+        axes[0].imshow(rgb); axes[0].set_title("RGB"); axes[0].axis("off")
+        for ax, t in zip(axes[1:], thresholds):
+            m = (edge_prob[L.EDGE_COASTLINE] >= t) & ~unobservable
+            over = overlay(rgb, {L.EDGE_COASTLINE: m})
+            ax.imshow(over)
+            ax.set_title(f"coastline @ {t:.2f}\n{int(m.sum())} px")
+            ax.axis("off")
+        fig.suptitle("Coastline channel vs threshold - pick where lines stop being blobs")
+        fig.tight_layout()
+        if args.save:
+            os.makedirs(os.path.dirname(os.path.abspath(args.save)), exist_ok=True)
+            fig.savefig(args.save, dpi=140, bbox_inches="tight")
+            print(f"sweep written to {args.save}")
+        elif not args.no_show:
+            plt.show()
+        return
 
     fig, axes = plt.subplots(1, 4, figsize=(18, 5))
     axes[0].imshow(rgb); axes[0].set_title("RGB")

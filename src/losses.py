@@ -59,20 +59,33 @@ def soft_dice_loss(logits, target, num_classes, ignore_mask=None, eps=1.0):
 
 
 def balanced_bce(logits, target, valid, max_pos_weight=100.0):
-    """Class-balanced BCE over valid pixels only.
+    """Class-balanced BCE over valid pixels only, weighted **per channel**.
 
     The positive weight is estimated from the batch rather than hardcoded, so
     it tracks the data instead of going stale when the dataset is regenerated.
+
+    It must be estimated per channel, because the three boundary types differ
+    in density by more than an order of magnitude - on a representative set,
+    coastline is ~2.6% of valid pixels, limb ~0.66%, terminator ~0.36%, which
+    call for weights of roughly 37, 151 and 279. Pooling them into a single
+    scalar gives ~81 for all three: coastline is over-weighted 2.2x and is
+    driven to over-predict (high recall, poor precision, thick blobby edges
+    rather than thin lines), while the terminator is under-weighted.
     """
     valid = valid.float()
-    n_valid = valid.sum().clamp(min=1.0)
-    n_pos = (target * valid).sum().clamp(min=1.0)
+    dims = (0, 2, 3) if logits.dim() == 4 else tuple(range(logits.dim()))
+
+    n_valid = valid.sum(dims).clamp(min=1.0)
+    n_pos = (target * valid).sum(dims).clamp(min=1.0)
     pos_weight = ((n_valid - n_pos) / n_pos).clamp(max=max_pos_weight)
+    if logits.dim() == 4:
+        pos_weight = pos_weight.view(-1, 1, 1)   # broadcast over (B, C, H, W)
 
     raw = F.binary_cross_entropy_with_logits(
         logits, target, reduction="none", pos_weight=pos_weight
     )
-    return (raw * valid).sum() / n_valid
+    # Normalise by total valid pixels so the scale matches the pooled version.
+    return (raw * valid).sum() / valid.sum().clamp(min=1.0)
 
 
 class CombinedLoss(nn.Module):
