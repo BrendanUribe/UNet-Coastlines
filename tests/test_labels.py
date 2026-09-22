@@ -172,3 +172,46 @@ def test_class_coverage_is_exhaustive():
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_antialiased_limb_is_classified_by_majority_coverage():
+    """POV-Ray renders the masks with Antialias=On, Threshold=0.0, so limb
+    pixels are a blend of the red space sentinel and the surface beneath.
+
+    The sentinel is chosen so this stays decodable: for a pixel that is
+    fraction ``a`` space over ocean (0,0,0) the result is ``(a,0,0)``, and over
+    land (1,1,1) it is ``(1,1-a,1-a)``. In both cases ``R - G == a`` exactly,
+    so thresholding at 0.5 assigns the pixel to whichever actually covers most
+    of it. Without that property, antialiased limb pixels over land would
+    decode as water and manufacture a false coastline all along the limb.
+    """
+    def quantise(v):
+        return np.round(np.clip(v, 0, 1) * 255) / 255.0
+
+    lit = np.full((1, 1, 3), 0.5, np.float32)
+    no_cloud = np.array(L.SPACE_SENTINEL_RGB, np.float32).reshape(1, 1, 3)
+
+    for surface, expected_surface in (((0, 0, 0), L.WATER), ((1, 1, 1), L.LAND)):
+        for a in (0.0, 0.1, 0.25, 0.4, 0.45, 0.49):
+            px = quantise(a * np.array(L.SPACE_SENTINEL_RGB) + (1 - a) * np.array(surface))
+            seg = L.compose_seg_label(lit, px.reshape(1, 1, 3).astype(np.float32), no_cloud)
+            assert seg[0, 0] == expected_surface, f"a={a} surface={surface} -> {seg[0,0]}"
+
+        for a in (0.55, 0.6, 0.75, 0.9, 1.0):
+            px = quantise(a * np.array(L.SPACE_SENTINEL_RGB) + (1 - a) * np.array(surface))
+            seg = L.compose_seg_label(lit, px.reshape(1, 1, 3).astype(np.float32), no_cloud)
+            assert seg[0, 0] == L.SPACE, f"a={a} surface={surface} -> {seg[0,0]}"
+
+
+def test_antialiased_cloud_edge_is_majority_coverage():
+    """Same property for the cloud mask: white cloud over the red sentinel."""
+    def quantise(v):
+        return np.round(np.clip(v, 0, 1) * 255) / 255.0
+
+    lit = np.full((1, 1, 3), 0.5, np.float32)
+    ocean = np.zeros((1, 1, 3), np.float32)
+
+    for a, expected in ((0.0, L.WATER), (0.4, L.WATER), (0.6, L.CLOUD), (1.0, L.CLOUD)):
+        px = quantise(a * np.array([1.0, 1.0, 1.0]) + (1 - a) * np.array(L.SPACE_SENTINEL_RGB))
+        seg = L.compose_seg_label(lit, ocean, px.reshape(1, 1, 3).astype(np.float32))
+        assert seg[0, 0] == expected, f"cloud coverage {a} -> {L.SEG_CLASS_NAMES[seg[0,0]]}"
