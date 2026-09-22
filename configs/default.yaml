@@ -1,0 +1,69 @@
+# Default training configuration.
+#
+# Every run is fully described by this file plus the git commit, so an
+# experiment can be reproduced from the record alone. Override any field from
+# the command line, e.g.:
+#     python src/train_unet.py --config configs/default.yaml --epochs 200
+
+data:
+  image_dir: "dataset/images"
+  mask_dir: "dataset/masks"
+  cloud_mask_dir: "dataset/cloud masks"
+  # 240x320 keeps the native 4:3 of the 2048x1536 renders and is divisible by
+  # 16. Do not set a square size: it squashes the Earth disc into an ellipse
+  # and breaks the camera model used by the optical-navigation routines.
+  img_size: [240, 320]
+  night_luma: 0.03
+  val_fraction: 0.2
+  split_seed: 1337
+  # Per-channel normalisation. Regenerate with:
+  #     python src/compute_class_weights.py --stats
+  mean: [0.0975, 0.1021, 0.1188]
+  std:  [0.1560, 0.1552, 0.1725]
+
+augment:
+  enabled: true
+  rotate: true          # spacecraft roll about boresight is unconstrained
+  flip: true
+  brightness: 0.25
+  contrast: 0.25
+  gamma: 0.25
+  gaussian_noise_std: 0.02
+  shot_noise: true
+  blur_sigma_max: 1.2
+  p_photometric: 0.8
+  p_noise: 0.5
+  p_blur: 0.3
+
+model:
+  base_width: 64        # 32 or 16 for an embedded target; see README
+  depth: 4              # max 4 at 240x320 (240 = 16 x 15)
+  groups: 8
+  deep_supervision: true
+
+loss:
+  # null = unweighted. Generate real weights with:
+  #     python src/compute_class_weights.py
+  class_weights: null
+  dice_weight: 1.0
+  deep_supervision_weight: 0.4
+  learn_task_weights: true
+  static_edge_weight: 1.0
+
+train:
+  epochs: 100
+  batch_size: 8
+  lr: 0.001             # GroupNorm makes this stable; the old net needed 5e-5
+  weight_decay: 0.0001
+  num_workers: 4
+  amp: true
+  seed: 0
+  scheduler: "cosine"   # cosine | plateau | none
+  warmup_epochs: 3
+  grad_clip: 1.0
+  # Validation metric used to pick the best checkpoint.
+  monitor: "edge/coastline/ODS_F1"
+  monitor_mode: "max"
+  early_stop_patience: 0   # 0 disables
+  out_dir: "runs/default"
+  eval_every: 1

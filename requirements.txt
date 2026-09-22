@@ -1,0 +1,22 @@
+# Deep learning
+torch>=2.1
+torchvision>=0.16
+
+# Imaging and numerics
+numpy>=1.24
+opencv-python>=4.8
+scipy>=1.10
+Pillow>=10.0
+matplotlib>=3.7
+PyYAML>=6.0
+
+# Testing
+pytest>=7.4
+
+# --- Image generation only (src/functions.py, src/main_image_gen_*.py) ---
+# Not needed to train or evaluate. These also require a POV-Ray binary on PATH
+# and the SPICE kernels / texture maps in Kernels/ and Maps/.
+spiceypy>=5.1
+geopandas>=0.14
+pandas>=2.0
+scikit-image>=0.21

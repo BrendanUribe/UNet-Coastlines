@@ -1,129 +1,165 @@
-import torch 
-from PIL import Image # image opening
-import torchvision.transforms as T # preprocessing tools for resizing and converting images to tensors
-import matplotlib.pyplot as plt # plotting
-import cv2 # open cv for edge detection
-import numpy as np # math, ioU, Dice
-import time  # timer
-from UNet import UNet # unet model
-from matplotlib import cm
+"""Qualitative prediction on a single frame.
+
+The original hardcoded a checkpoint filename that still contained its
+``2025-XX-XX`` placeholder, so the script could not run as committed; it also
+computed a cloud-suppressed coastline and then never displayed it.
+
+This version takes arguments, restores the checkpoint's own configuration so
+the model is rebuilt exactly as trained, and renders the four panels.  For
+numbers over a held-out set use ``evaluate.py`` - a single eyeballed frame is
+not a result.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+import time
+
+import cv2
+import numpy as np
+import torch
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import labels as L
+from UNet import UNet
+
+#: Display colours (RGB) for the segmentation classes.
+CLASS_COLOURS = np.array(
+    [
+        [0, 0, 0],        # space
+        [20, 70, 160],    # water
+        [90, 150, 60],    # land
+        [235, 235, 240],  # cloud
+        [45, 40, 70],     # night
+    ],
+    dtype=np.uint8,
+)
+
+EDGE_COLOURS = {
+    L.EDGE_COASTLINE: (255, 60, 60),
+    L.EDGE_LIMB: (60, 255, 120),
+    L.EDGE_TERMINATOR: (255, 210, 60),
+}
 
 
-def non_max_suppress_thin(edge_prob):
-    """Keeps only the local maxima in the edge probability map, thinning the edges to a single pixel width."""
-    gx = cv2.Sobel(edge_prob, cv2.CV_64F, 1, 0, ksize=3)
-    gy = cv2.Sobel(edge_prob, cv2.CV_64F, 0, 1, ksize=3)
-    angle = (np.arctan2(gy, gx) * 180.0 / np.pi) % 180.0
+def load_model(ckpt_path, device):
+    """Rebuild the model from the checkpoint's stored config."""
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    cfg = ckpt.get("config", {})
+    model_cfg = cfg.get("model", {})
+    data_cfg = cfg.get("data", {})
 
-    H, W = edge_prob.shape
-    thinned = np.zeros_like(edge_prob)
+    model = UNet(
+        in_channels=3,
+        num_classes=L.NUM_SEG_CLASSES,
+        num_edge_channels=L.NUM_EDGE_CHANNELS,
+        **model_cfg,
+    ).to(device)
+    model.load_state_dict(ckpt["model"])
+    model.eval()
 
-    for i in range(1, H - 1):
-        for j in range(1, W - 1):
-            a = angle[i, j]
-            if a < 22.5 or a >= 157.5:
-                n1, n2 = edge_prob[i, j - 1], edge_prob[i, j + 1]
-            elif a < 67.5:
-                n1, n2 = edge_prob[i - 1, j + 1], edge_prob[i + 1, j - 1]
-            elif a < 112.5:
-                n1, n2 = edge_prob[i - 1, j], edge_prob[i + 1, j]
-            else:
-                n1, n2 = edge_prob[i - 1, j - 1], edge_prob[i + 1, j + 1]
-
-            if edge_prob[i, j] >= n1 and edge_prob[i, j] >= n2:
-                thinned[i, j] = edge_prob[i, j]
-
-    return thinned
-
-print("STARTED")
-
-# Load model
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-model = UNet(in_channels=3, num_classes=3).to(device) # rgb to 3 channel mask 
-# trained weighted model
-model.load_state_dict(torch.load("unet_256_100ep_2headed_2025-XX-XX.pth", map_location=device)) # change .pth name (unet_<res>_<epochs>ep_pw<posweight>_<date>.pth)
-model.eval() # evaluation mode for predicting not training
-
-# Load image can change number to desired image can see where it worked well where it didnt
-img_path = "dataset/images/earth_img_2.png"
-image = Image.open(img_path).convert("RGB") # this one is rgb image
-
-transform = T.Compose([
-    # T.CenterCrop(512), # originally had it cropped bc some pics were far out but defeated the purpose of training on different scales 
-    T.Resize((256, 256)), # esnure same size from traing
-    T.ToTensor() # make tensor
-])
-
-input_tensor = transform(image).unsqueeze(0).to(device) # adda batch dim
-
-image_plot = transform(image).permute(1, 2, 0).numpy()
-
-# TOTAL TIMER START
-total_start = time.time()
-
-# MODEL TIMER START
-model_start = time.time()
-
-# Predict
-with torch.inference_mode():
-    seg_out, edge_outputs = model(input_tensor)
-
-    print("edge_out min/max (raw logits):", edge_outputs[-1].min().item(), edge_outputs[-1].max().item())
-    print("seg_out per-class mean score:", seg_out.mean(dim=[0,2,3]))
-
-    seg_pred = torch.argmax(seg_out, dim=1).squeeze().cpu().numpy()
-
-    edge_prob = torch.sigmoid(edge_outputs[-1]).squeeze().cpu().numpy()   # stays as continuous 0-1 values, no threshold yet
-
-model_time = time.time() - model_start
-
-# Suppress edge predictions that fall inside predicted cloud regions, BEFORE thinning
-cloud_pixels = (seg_pred == 2)
-edge_prob[cloud_pixels] = 0
-
-background_pixels = (image_plot.mean(axis=2) < 0.02)  # very dark pixels, background/space
-norm = plt.Normalize(vmin=0, vmax=2)
-seg_display = cm.viridis(norm(seg_pred))
-seg_display[background_pixels] = [0.12, 0.12, 0.12, 1.0]   # force background to neutral gray
-edge_prob[background_pixels] = 0
-
-edge_thin_prob = non_max_suppress_thin(edge_prob)   # NMS runs on the continuous probability map
-edge_thin = (edge_thin_prob > 0.5).astype(np.float32)   # threshold happens LAST
-
-total_time = time.time() - total_start
-
-print(f"\nModel inference time: {model_time:.4f} sec")
-print(f"Total prediction time: {total_time:.4f} sec\n")
-
-# build an RGB overlay: the original image with predicted coastline pixels painted bright red
-coastline_overlay = image_plot.copy()
-coastline_overlay[edge_thin > 0] = [1.0, 0.0, 0.0]  # red for coastline
-
-# Plot results
-plt.figure(figsize=(16, 4))
-
-plt.subplot(1, 4, 1)
-plt.title("RGB Image")
-plt.imshow(image_plot)
-plt.axis("off")
-
-plt.subplot(1, 4, 2)
-plt.title("Predicted Land/Water/Cloud")
-plt.imshow(seg_display)
-plt.axis("off")
-
-plt.subplot(1, 4, 3)
-plt.title("Predicted Coastline (thin)")
-plt.imshow(edge_thin, cmap="gray")
-plt.axis("off")
-
-plt.subplot(1, 4, 4)
-plt.title("Coastline over RGB")
-plt.imshow(coastline_overlay)
-plt.axis("off")
+    img_size = tuple(data_cfg.get("img_size", (240, 320)))
+    mean = np.asarray(data_cfg.get("mean", (0.0975, 0.1021, 0.1188)), np.float32)
+    std = np.asarray(data_cfg.get("std", (0.1560, 0.1552, 0.1725)), np.float32)
+    return model, img_size, mean, std, ckpt.get("epoch")
 
 
+def preprocess(path, img_size, mean, std):
+    bgr = cv2.imread(path, cv2.IMREAD_COLOR)
+    if bgr is None:
+        raise FileNotFoundError(f"could not read image: {path}")
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
 
-plt.show()
+    th, tw = img_size
+    src, dst = rgb.shape[1] / rgb.shape[0], tw / th
+    if abs(src - dst) / src > 0.01:
+        print(
+            f"WARNING: source aspect {src:.3f} != target {dst:.3f}; the Earth disc "
+            f"will be distorted and any limb fit from this frame will be biased."
+        )
+    resized = cv2.resize(rgb, (tw, th), interpolation=cv2.INTER_AREA)
+    norm = (resized - mean) / std
+    return resized, torch.from_numpy(norm.transpose(2, 0, 1)).unsqueeze(0)
 
+
+def overlay(rgb01, edge_masks, alpha=1.0):
+    out = (np.clip(rgb01, 0, 1) * 255).astype(np.uint8).copy()
+    for ch, mask in edge_masks.items():
+        out[mask] = (
+            (1 - alpha) * out[mask] + alpha * np.array(EDGE_COLOURS[ch], np.float32)
+        ).astype(np.uint8)
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--checkpoint", required=True, help="path to best.pth / last.pth")
+    ap.add_argument("--image", required=True, help="RGB render to run on")
+    ap.add_argument("--threshold", type=float, default=0.5)
+    ap.add_argument("--device", default=None)
+    ap.add_argument("--save", default=None, help="write the figure here instead of showing it")
+    ap.add_argument("--no-show", action="store_true")
+    args = ap.parse_args()
+
+    device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
+    model, img_size, mean, std, epoch = load_model(args.checkpoint, device)
+    print(f"loaded {args.checkpoint} (epoch {epoch}) on {device}, input {img_size}")
+
+    rgb, tensor = preprocess(args.image, img_size, mean, std)
+    tensor = tensor.to(device)
+
+    t0 = time.time()
+    with torch.inference_mode():
+        seg_out, edge_out, _ = model(tensor)
+        seg = seg_out.argmax(1)[0].cpu().numpy()
+        edge_prob = torch.sigmoid(edge_out)[0].cpu().numpy()
+    infer_s = time.time() - t0
+
+    raw = {c: edge_prob[c] >= args.threshold for c in range(L.NUM_EDGE_CHANNELS)}
+
+    # A coastline cannot be observed through cloud or past the terminator, so
+    # suppress predictions there rather than drawing them.
+    unobservable = np.isin(seg, [L.CLOUD, L.NIGHT, L.SPACE])
+    clean = dict(raw)
+    clean[L.EDGE_COASTLINE] = raw[L.EDGE_COASTLINE] & ~unobservable
+
+    print(f"inference: {infer_s*1000:.1f} ms on {device} "
+          f"({'GPU' if device.type=='cuda' else 'CPU'}; state the hardware when quoting this)")
+    total = seg.size
+    for c in range(L.NUM_SEG_CLASSES):
+        print(f"  {L.SEG_CLASS_NAMES[c]:6s} {(seg==c).sum()/total:6.3f}")
+    for c in range(L.NUM_EDGE_CHANNELS):
+        print(f"  {L.EDGE_CHANNEL_NAMES[c]:11s} {int(clean[c].sum()):6d} px "
+              f"(raw {int(raw[c].sum())})")
+
+    import matplotlib
+    if args.no_show or args.save:
+        matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(1, 4, figsize=(18, 5))
+    axes[0].imshow(rgb); axes[0].set_title("RGB")
+    axes[1].imshow(CLASS_COLOURS[seg]); axes[1].set_title("Segmentation")
+    bands = np.zeros((*seg.shape, 3), np.uint8)
+    for c, m in clean.items():
+        bands[m] = EDGE_COLOURS[c]
+    axes[2].imshow(bands)
+    axes[2].set_title("Boundaries\nred=coast  green=limb  yellow=terminator")
+    axes[3].imshow(overlay(rgb, clean)); axes[3].set_title("Boundaries over RGB")
+    for a in axes:
+        a.axis("off")
+    fig.tight_layout()
+
+    if args.save:
+        os.makedirs(os.path.dirname(os.path.abspath(args.save)), exist_ok=True)
+        fig.savefig(args.save, dpi=140, bbox_inches="tight")
+        print(f"figure written to {args.save}")
+    elif not args.no_show:
+        plt.show()
+
+
+if __name__ == "__main__":
+    main()

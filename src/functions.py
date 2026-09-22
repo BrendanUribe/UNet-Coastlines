@@ -8091,6 +8091,12 @@ def gen_moon_earthMASK(sc_eph, time_eph, camera_definition, iter, ocean_reflecti
     pov_file.write('#version 3.7;\n'
                    '#include "colors.inc"\n'
                    '#include "functions.inc"\n\n')
+    # LABEL-CORRECTNESS FIX: give empty space a sentinel colour so it is
+    # distinguishable from ocean. POV-Ray's default background is black, which
+    # is identical to the ocean value in this mask -> space was being labelled
+    # as water. Pure red is unambiguous: space has R>>G, ocean is (0,0,0) and
+    # land is (1,1,1). Must stay in sync with SPACE_SENTINEL_RGB in src/labels.py.
+    pov_file.write('background { color rgb <1, 0, 0> }\n')
 
     # pov_file.write('// GLOBAL SETTINGS\n'
     #         'global_settings { \n'
@@ -8165,8 +8171,8 @@ def gen_moon_earthMASK(sc_eph, time_eph, camera_definition, iter, ocean_reflecti
             '           }\n'
             '           texture_map{\n'
             # '                   [0.000 pigment{color rgb <0.007, 0.03, 0.1>*0.6} finish{ambient 0.0 reflection {0.05,0.25} diffuse 0.85 brilliance 1.0 phong 0.06 phong_size 30}]\n'
-            '                   [0.000 pigment{color rgb <0.0, 0.0, 0.0>} finish{ambient 0.0 reflection {0.0} diffuse 1 brilliance 0 phong 0.0}]\n'
-            '                   [1.000 pigment{color rgb <1.00, 1.0, 1.0>} finish{ambient 0.0 reflection {0.0} diffuse 1 brilliance 0 phong 0.0}]\n'
+            '                   [0.000 pigment{color rgb <0.0, 0.0, 0.0>} finish{ambient 1.0 reflection {0.0} diffuse 0.0 brilliance 0 phong 0.0}]\n'
+            '                   [1.000 pigment{color rgb <1.00, 1.0, 1.0>} finish{ambient 1.0 reflection {0.0} diffuse 0.0 brilliance 0 phong 0.0}]\n'
 
 
             '           }\n'
@@ -9189,6 +9195,12 @@ def gen_moon_earthCLOUDMASK(sc_eph, time_eph, camera_definition, iter, ocean_ref
     pov_file.write('#version 3.7;\n'
                    '#include "colors.inc"\n'
                    '#include "functions.inc"\n\n')
+    # LABEL-CORRECTNESS FIX: give empty space a sentinel colour so it is
+    # distinguishable from ocean. POV-Ray's default background is black, which
+    # is identical to the ocean value in this mask -> space was being labelled
+    # as water. Pure red is unambiguous: space has R>>G, ocean is (0,0,0) and
+    # land is (1,1,1). Must stay in sync with SPACE_SENTINEL_RGB in src/labels.py.
+    pov_file.write('background { color rgb <1, 0, 0> }\n')
 
     # pov_file.write('// GLOBAL SETTINGS\n'
     #         'global_settings { \n'
@@ -9263,8 +9275,8 @@ def gen_moon_earthCLOUDMASK(sc_eph, time_eph, camera_definition, iter, ocean_ref
             '           }\n'
             '           texture_map{\n'
             # '                   [0.000 pigment{color rgb <0.007, 0.03, 0.1>*0.6} finish{ambient 0.0 reflection {0.05,0.25} diffuse 0.85 brilliance 1.0 phong 0.06 phong_size 30}]\n'
-            '                   [0.000 pigment{color rgb <0.0, 0.0, 0.0>} finish{ambient 0.0 reflection {0.0} diffuse 1 brilliance 0 phong 0.0}]\n'
-            '                   [1.000 pigment{color rgb <1.00, 1.0, 1.0>} finish{ambient 0.0 reflection {0.0} diffuse 1 brilliance 0 phong 0.0}]\n'
+            '                   [0.000 pigment{color rgb <0.0, 0.0, 0.0>} finish{ambient 1.0 reflection {0.0} diffuse 0.0 brilliance 0 phong 0.0}]\n'
+            '                   [1.000 pigment{color rgb <1.00, 1.0, 1.0>} finish{ambient 1.0 reflection {0.0} diffuse 0.0 brilliance 0 phong 0.0}]\n'
 
 
             '           }\n'
@@ -9636,6 +9648,13 @@ def gen_moon_earthCLOUDMASK(sc_eph, time_eph, camera_definition, iter, ocean_ref
     #0.03
     sun_dir = np.array(sun_pos_e)
     sun_dir = sun_dir / np.linalg.norm(sun_dir)
+    # LABEL-CORRECTNESS FIX: the cloud sphere must be clipped to the hemisphere
+    # facing the CAMERA, not the one facing the Sun. The cloud mask is pure
+    # geometry (ambient 1 / diffuse 0) and the Earth sphere is not present in
+    # this scene to occlude it, so a Sun-facing clip leaks far-side clouds into
+    # the mask at high phase angle and drops near-side night clouds.
+    cam_dir = np.array(sc_pos, dtype=float)
+    cam_dir = cam_dir / np.linalg.norm(cam_dir)
     pov_file.write(
     '#declare clouds = \n'
     '   sphere {\n'
@@ -9653,7 +9672,7 @@ def gen_moon_earthCLOUDMASK(sc_eph, time_eph, camera_definition, iter, ocean_ref
     '                   [1.0 color rgbt <1,1,1,0>]\n'
     '               }\n'
     '           }\n'
-    '           finish{ambient 0.0 diffuse 1}\n'
+    '           finish{ambient 1.0 diffuse 0.0}\n'
     '       }\n'
     '       hollow on\n'
     '       no_shadow\n'
@@ -9662,7 +9681,7 @@ def gen_moon_earthCLOUDMASK(sc_eph, time_eph, camera_definition, iter, ocean_ref
     str(rotm_earth[0][1]) + ',' + str(rotm_earth[0][2]) + ','
     + str(rotm_earth[1][0]) + ',' + str(rotm_earth[1][1]) + ',' + str(rotm_earth[1][2]) + ','
     + str(rotm_earth[2][0]) + ',' + str(rotm_earth[2][1]) + ',' + str(rotm_earth[2][2]) + ', 0, 0, 0>\n'
-    '       clipped_by { plane { <' + str(-sun_dir[0]) + ',' + str(-sun_dir[1]) + ',' + str(-sun_dir[2]) + '>, 0 } }\n'
+    '       clipped_by { plane { <' + str(-cam_dir[0]) + ',' + str(-cam_dir[1]) + ',' + str(-cam_dir[2]) + '>, 0 } }\n'
     '   }\n')
     # Star Sky Sphere - Not used because the Moon and the Earth are far brighter than stars, making the star map completely black (unless it is a parallax observation)
     # stars =     Sphere([0,0,0], 1, 'hollow on', Texture( Pigment( ImageMap( 'tiff', color_star_fileq, "map_type", 1 ))),
