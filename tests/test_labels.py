@@ -215,3 +215,60 @@ def test_antialiased_cloud_edge_is_majority_coverage():
         px = quantise(a * np.array([1.0, 1.0, 1.0]) + (1 - a) * np.array(L.SPACE_SENTINEL_RGB))
         seg = L.compose_seg_label(lit, ocean, px.reshape(1, 1, 3).astype(np.float32))
         assert seg[0, 0] == expected, f"cloud coverage {a} -> {L.SEG_CLASS_NAMES[seg[0,0]]}"
+
+
+def _zoomed_scene():
+    """A close-range frame: the Earth overfills the sensor, so NO space is in
+    view. Below ~59,000 km for this camera the disc is larger than the frame,
+    which is a regime we deliberately want in the training set."""
+    land = np.zeros((H, W), bool)
+    land[10:50, 10:50] = True           # a continent, no limb anywhere
+
+    cloud = np.zeros((H, W), bool)
+    cloud[5:20, 40:60] = True
+
+    mask = np.zeros((H, W, 3), np.float32)      # no sentinel: frame is all Earth
+    mask[land] = (1.0, 1.0, 1.0)
+
+    cloud_mask = np.zeros((H, W, 3), np.float32)
+    cloud_mask[~cloud] = L.SPACE_SENTINEL_RGB   # sentinel still shows through
+
+    image = np.full((H, W, 3), 0.4, np.float32)
+    image[cloud] = 0.95
+    return image, mask, cloud_mask, land, cloud
+
+
+def test_zoomed_frame_with_no_space_is_not_mistaken_for_legacy():
+    """Regression: a close-range post-fix render contains no space at all, so
+    the land/sea mask has no sentinel. Testing that mask alone rejected every
+    close-range frame in the dataset. The cloud mask settles it, because its
+    sentinel shows through wherever there is no cloud, at any zoom level."""
+    image, mask, cloud_mask, *_ = _zoomed_scene()
+
+    assert not L.has_space_sentinel(mask), "this fixture should have no space"
+    assert L.has_space_sentinel(cloud_mask)
+    assert L.is_post_fix_render(mask, cloud_mask), "close-range frame wrongly called legacy"
+
+
+def test_zoomed_frame_labels_correctly():
+    """With no space in frame, the whole image is Earth and there is no limb."""
+    image, mask, cloud_mask, land, cloud = _zoomed_scene()
+    seg = L.compose_seg_label(image, mask, cloud_mask)
+
+    assert not (seg == L.SPACE).any(), "nothing should be labelled space"
+    assert (seg == L.LAND).any() and (seg == L.WATER).any() and (seg == L.CLOUD).any()
+
+    edges, valid = L.make_edge_targets(seg)
+    assert edges[L.EDGE_LIMB].sum() == 0, "no limb should be found when no space is in view"
+    assert edges[L.EDGE_COASTLINE].sum() > 0, "the coastline is still there"
+
+
+def test_genuinely_legacy_pair_is_still_caught():
+    """Both masks lacking the sentinel is still a pre-fix render."""
+    image, mask, cloud_mask, *_ = _scene()
+    legacy_mask = mask.copy()
+    legacy_mask[L.is_space_sentinel(mask)] = 0.0
+    legacy_cloud = cloud_mask.copy()
+    legacy_cloud[L.is_space_sentinel(cloud_mask)] = 0.0
+
+    assert not L.is_post_fix_render(legacy_mask, legacy_cloud)

@@ -113,11 +113,34 @@ def is_space_sentinel(mask_rgb: np.ndarray) -> np.ndarray:
 
 
 def has_space_sentinel(mask_rgb: np.ndarray, min_fraction: float = 1e-4) -> bool:
-    """Whether a mask looks like it came from the fixed renderer.
+    """Whether this one mask contains any of the space sentinel.
 
-    Used to refuse silently-mislabelled legacy data rather than training on it.
+    Absence does NOT by itself mean a pre-fix render - see
+    ``is_post_fix_render``.
     """
     return bool(is_space_sentinel(mask_rgb).mean() >= min_fraction)
+
+
+def is_post_fix_render(mask_rgb: np.ndarray, cloud_rgb: np.ndarray,
+                       min_fraction: float = 1e-4) -> bool:
+    """Whether a mask pair came from the renderer with the label fix applied.
+
+    The land/sea mask alone is not sufficient. At close range the Earth
+    overfills the sensor - below roughly 59,000 km for this camera - so a
+    perfectly good post-fix mask can contain no space at all, and testing it
+    alone would reject every close-range frame in the set.
+
+    The cloud mask settles it. Its scene contains only the cloud shell, with
+    non-cloud left transparent, so the sentinel background shows through
+    wherever there is no cloud - which is true at any zoom level. A pre-fix
+    cloud mask has a black background and no sentinel anywhere.
+
+    So a render is post-fix if *either* mask shows the sentinel. The one case
+    this cannot distinguish is a close-range frame with total cloud cover and
+    no visible space, which leaves nothing for the sentinel to show through.
+    """
+    return (has_space_sentinel(mask_rgb, min_fraction)
+            or has_space_sentinel(cloud_rgb, min_fraction))
 
 
 def compose_seg_label(

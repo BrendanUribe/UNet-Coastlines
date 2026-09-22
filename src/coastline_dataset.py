@@ -267,13 +267,14 @@ class CoastlineDataset(Dataset):
             )
 
         if not self._checked_sentinel:
-            if not (L.has_space_sentinel(mask) or self.cfg.allow_legacy_masks):
+            if not (L.is_post_fix_render(mask, cloud) or self.cfg.allow_legacy_masks):
                 raise RuntimeError(
-                    f"{name}: this mask has no space sentinel, so it was rendered "
-                    f"before the label fix in functions.py. Those masks put empty "
-                    f"space and ocean at the same value and shade the mask by "
-                    f"sunlight, which labels the night side as water and the "
-                    f"terminator as a coastline. Re-render the dataset, or pass "
+                    f"{name}: neither the land/sea mask nor the cloud mask "
+                    f"contains the space sentinel, so this was rendered before the "
+                    f"label fix in functions.py. Those masks put empty space and "
+                    f"ocean at the same value and shade the mask by sunlight, which "
+                    f"labels the night side as water and the terminator as a "
+                    f"coastline. Re-render the dataset, or pass "
                     f"allow_legacy_masks=True to train on known-bad labels."
                 )
             self._checked_sentinel = True

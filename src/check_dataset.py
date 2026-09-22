@@ -74,11 +74,8 @@ def main():
             broken.append((name, f"size mismatch {img.shape[:2]}/{mask.shape[:2]}/{cloud.shape[:2]}"))
             continue
 
-        if not L.has_space_sentinel(mask):
-            legacy.append((name, "mask has no space sentinel (pre-fix render)"))
-            continue
-        if not L.has_space_sentinel(cloud):
-            legacy.append((name, "cloud mask has no space sentinel (pre-fix render)"))
+        if not L.is_post_fix_render(mask, cloud):
+            legacy.append((name, "no space sentinel in either mask (pre-fix render)"))
             continue
 
         seg = L.compose_seg_label(img, mask, cloud)
