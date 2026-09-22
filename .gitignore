@@ -1,4 +1,27 @@
-Kernels/ 
+# Large third-party assets (SPICE kernels, POV-Ray texture maps)
+Kernels/
 Maps/
-__pycache__/
+
+# Generated data and training output
 dataset/
+runs/
+*.pth
+*.pt
+*.onnx
+*.npz
+image_gen_data_*.npz
+image_gen_allcases.npz
+
+# POV-Ray scratch files
+tmp_*.pov
+tmp_*.ini
+earth_img_*.png
+moon_img_*.png
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ipynb_checkpoints/

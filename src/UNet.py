@@ -1,98 +1,202 @@
-import torch # py torch deep learning library
-import torch.nn as nn # neural network tools
-import torch.nn.functional as F # needed for F.interpolate (upsampling the multi-scale edge outputs)
+"""U-Net with a segmentation head and a deeply-supervised boundary head.
 
-# double convolution block for UNet
-class DoubleConv(nn.Module): # recognize this part as a neural network (pytorch)
-    def __init__(self, in_channels, out_channels): # setup funnction for the block
-        # inputs: in_channels (number of input channels), out_channels (number of output channels)
-        # rgb 3 channels in, 1 channel out for binary mask 
+Architecture notes and why each choice was made
+-----------------------------------------------
+The skeleton is still the original U-Net (Ronneberger, Fischer & Brox, MICCAI
+2015, arXiv:1505.04597).  Four changes to the 2015 formulation:
 
+* **GroupNorm** (Wu & He, ECCV 2018, arXiv:1803.08494) instead of no
+  normalisation.  The original had none because BatchNorm was not yet standard,
+  and the consequence here was a learning rate pinned at 5e-5 to stay stable.
+  GroupNorm rather than BatchNorm because batch sizes for 240x320 imagery are
+  small (4-8), which is exactly where BatchNorm's batch statistics degrade.
+
+* **Depth 4 by default** instead of 3.  A whole-disc Earth view needs global
+  context - which side is lit, where the limb runs - and three poolings leaves
+  the bottleneck receptive field too small to see it.  nnU-Net (Isensee et al.,
+  Nature Methods 18, 203-211, 2021) derives depth from patch size and is the
+  reference for configuring a plain U-Net properly rather than reaching for an
+  exotic variant.
+
+* **Bilinear upsample + 3x3 conv** instead of ConvTranspose2d.  Transposed
+  convolutions produce periodic checkerboard artifacts (Odena, Dumoulin & Olah,
+  Distill 2016).  With kernel=2/stride=2 the original was at the least-bad
+  setting, but the output here is one-pixel-wide lines, which is precisely the
+  case where periodic artifacts are unaffordable.
+
+* **Deep supervision on the boundary head.**  Edge detection benefits strongly
+  from supervising every scale and fusing, which is the central result of HED
+  (Xie & Tu, ICCV 2015, arXiv:1504.06375).  The combined segmentation + edge
+  U-Net for coastlines is HED-UNet (Heidler et al., IEEE TGRS 60, 2022,
+  arXiv:2103.01849), which is the closest published analogue to this model.
+
+The boundary head emits three channels - coastline, limb and terminator - see
+``labels.py`` for why those are separated rather than merged into one
+"coastline" output.
+"""
+
+from __future__ import annotations
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+def _norm(channels: int, groups: int = 8) -> nn.Module:
+    """GroupNorm with a group count that always divides the channel count."""
+    g = min(groups, channels)
+    while channels % g:
+        g -= 1
+    return nn.GroupNorm(g, channels)
+
+
+class DoubleConv(nn.Module):
+    """(conv 3x3 -> norm -> ReLU) x 2."""
+
+    def __init__(self, in_channels: int, out_channels: int, groups: int = 8):
         super().__init__()
-
-        # layers run in order 
         self.conv = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, 3, padding=1), # 2d conv layer to learn patterns (3x3 kernal, 1 padding to not shrink)
-            nn.ReLU(inplace=True), # ReLU activation function 
-            nn.Conv2d(out_channels, out_channels, 3, padding=1), # 2nd 2d layer
+            nn.Conv2d(in_channels, out_channels, 3, padding=1, bias=False),
+            _norm(out_channels, groups),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, 3, padding=1, bias=False),
+            _norm(out_channels, groups),
             nn.ReLU(inplace=True),
         )
-        # 2 conv layers thus double conv block
-
-    def forward(self, x): # move data forward 'x' is feature map
-        return self.conv(x) # output processed features 
-
-
-class UNet(nn.Module): # main unet model
-    def __init__(self, in_channels=3, num_classes=3): # input channels (3 for rgb), output channels (3 for rgb), num_classes (3 for rgb)
-        super().__init__() # initialize pytorch structure
-
-        # Encoder - downsampling side that extracts features while reducing image size rbg input, 64 feature maps output, then 128, then 256
-        # each encoder block helps learn more complex features 
-        self.enc1 = DoubleConv(in_channels, 64) 
-        self.enc2 = DoubleConv(64, 128)
-        self.enc3 = DoubleConv(128, 256)
-
-        self.pool = nn.MaxPool2d(2) # reduce image size by half to learn larger scale features 
-
-        # Bottleneck - deepest part receiving 256 feature maps output 516 features maps, learns most cmpressed image info
-        self.bottleneck = DoubleConv(256, 512)
-
-        # Decoder - upsamples bottleneck to double image size then decode feature maps to reconstruct image, 512 to 256, then 256 to 128, then 128 to 64
-        self.up3 = nn.ConvTranspose2d(512, 256, 2, stride=2)
-        self.dec3 = DoubleConv(512, 256)
-
-        self.up2 = nn.ConvTranspose2d(256, 128, 2, stride=2)
-        self.dec2 = DoubleConv(256, 128)
-
-        self.up1 = nn.ConvTranspose2d(128, 64, 2, stride=2)
-        self.dec1 = DoubleConv(128, 64)
-
-        # second 'head' for learning land/water/cloud and coastlines
-        self.seg_head = nn.Conv2d(64, num_classes, kernel_size=1) # final output mask for segmentation
-
-        self.edge_head_d3 = nn.Conv2d(256, 1, kernel_size=1) # coarse final output mask for edge detection at decoder level 3
-        self.edge_head_d2 = nn.Conv2d(128, 1, kernel_size=1) # medium final output mask for edge detection at decoder level 2
-        self.edge_head_d1 = nn.Conv2d(64, 1, kernel_size=1) # fine final output mask for edge detection at decoder level 1
-        self.edge_fuse = nn.Conv2d(3, 1, kernel_size=1) # fuse the three edge outputs into a single edge output
-
-        # Output - converts final 64 feature maps to desired... 1 masked image
-        # each pixel is 1 predicted value (land/water)
-        # self.final = nn.Conv2d(64, out_channels, kernel_size=1) *removed since now have 2 headed approach
 
     def forward(self, x):
-        # Encoder - first second and third encoder blocks for downsampling 
-        e1 = self.enc1(x)
-        e2 = self.enc2(self.pool(e1))
-        e3 = self.enc3(self.pool(e2))
+        return self.conv(x)
 
-        # Bottleneck - e passed thru bottlesneck b
-        b = self.bottleneck(self.pool(e3))
 
-        # Decoder - b is upsampled 
-        d3 = self.up3(b)
-        d3 = torch.cat([d3, e3], dim=1) # skip connection combining decoder features with matching encoder features 
-        d3 = self.dec3(d3)
+class Up(nn.Module):
+    """Bilinear upsample, concatenate the skip, then DoubleConv."""
 
-        d2 = self.up2(d3)
-        d2 = torch.cat([d2, e2], dim=1)
-        d2 = self.dec2(d2)
+    def __init__(self, in_channels: int, skip_channels: int, out_channels: int, groups: int = 8):
+        super().__init__()
+        self.reduce = nn.Conv2d(in_channels, out_channels, 1, bias=False)
+        self.conv = DoubleConv(out_channels + skip_channels, out_channels, groups)
 
-        d1 = self.up1(d2)
-        d1 = torch.cat([d1, e1], dim=1)
-        d1 = self.dec1(d1)
+    def forward(self, x, skip):
+        x = F.interpolate(x, size=skip.shape[-2:], mode="bilinear", align_corners=False)
+        x = self.reduce(x)
+        return self.conv(torch.cat([x, skip], dim=1))
 
-        # return self.final(d1) # final output mask * removed since now have 2 headed approach
-        seg_out = self.seg_head(d1) # segmentation output
 
-        edge_d3 = self.edge_head_d3(d3)   # (B, 1, 64, 64) 
-        edge_d2 = self.edge_head_d2(d2)   # (B, 1, 128, 128)
-        edge_d1 = self.edge_head_d1(d1)   # (B, 1, 256, 256)
+class UNet(nn.Module):
+    """Two-headed U-Net.
 
-        target_size = edge_d1.shape[-2:]
-        edge_d3_up = F.interpolate(edge_d3, size=target_size, mode='bilinear', align_corners=False)
-        edge_d2_up = F.interpolate(edge_d2, size=target_size, mode='bilinear', align_corners=False)
+    Parameters
+    ----------
+    in_channels
+        Input image channels (3 for RGB).
+    num_classes
+        Segmentation classes.  Default 5: space/water/land/cloud/night.
+    num_edge_channels
+        Boundary channels.  Default 3: coastline/limb/terminator.
+    base_width
+        Channels at the finest level.  Halve it (32) for an embedded target;
+        see the deployment notes in the README.
+    depth
+        Number of downsampling steps.
+    deep_supervision
+        Emit per-scale boundary logits during training, as in HED.  They are
+        returned only in training mode and are ignored at inference.
 
-        edge_fused = self.edge_fuse(torch.cat([edge_d3_up, edge_d2_up, edge_d1], dim=1)) # fuse the three edge outputs into a single edge output
+    Returns from ``forward``
+    ------------------------
+    ``seg_out``  ``(B, num_classes, H, W)`` logits
+    ``edge_out`` ``(B, num_edge_channels, H, W)`` logits
+    ``aux``      list of ``(B, num_edge_channels, H, W)`` logits, one per decoder
+                 scale, upsampled to full resolution.  Empty unless training
+                 with ``deep_supervision``.
+    """
 
-        return seg_out, [edge_d3_up, edge_d2_up, edge_d1, edge_fused] # return both outputs
+    def __init__(
+        self,
+        in_channels: int = 3,
+        num_classes: int = 5,
+        num_edge_channels: int = 3,
+        base_width: int = 64,
+        depth: int = 4,
+        groups: int = 8,
+        deep_supervision: bool = True,
+    ):
+        super().__init__()
+        if depth < 1:
+            raise ValueError("depth must be >= 1")
+        self.depth = depth
+        self.deep_supervision = deep_supervision
+        self.num_classes = num_classes
+        self.num_edge_channels = num_edge_channels
+
+        widths = [base_width * 2 ** i for i in range(depth)]
+
+        self.encoders = nn.ModuleList()
+        prev = in_channels
+        for w in widths:
+            self.encoders.append(DoubleConv(prev, w, groups))
+            prev = w
+
+        self.pool = nn.MaxPool2d(2)
+        self.bottleneck = DoubleConv(prev, prev * 2, groups)
+
+        self.decoders = nn.ModuleList()
+        prev = prev * 2
+        for w in reversed(widths):
+            self.decoders.append(Up(prev, w, w, groups))
+            prev = w
+
+        self.seg_head = nn.Conv2d(widths[0], num_classes, kernel_size=1)
+        self.edge_head = nn.Conv2d(widths[0], num_edge_channels, kernel_size=1)
+
+        # HED-style side outputs, one per decoder scale except the finest
+        # (which the main edge head already covers).
+        self.side_heads = nn.ModuleList(
+            nn.Conv2d(w, num_edge_channels, kernel_size=1)
+            for w in list(reversed(widths))[:-1]
+        ) if deep_supervision else nn.ModuleList()
+
+        self._init_weights()
+
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.GroupNorm):
+                nn.init.ones_(m.weight)
+                nn.init.zeros_(m.bias)
+
+    @property
+    def size_divisor(self) -> int:
+        """Input H and W must be multiples of this."""
+        return 2 ** self.depth
+
+    def forward(self, x):
+        h, w = x.shape[-2:]
+        d = self.size_divisor
+        if h % d or w % d:
+            raise ValueError(
+                f"input is {h}x{w}, but a depth-{self.depth} U-Net needs both "
+                f"dimensions divisible by {d}. Resize or pad first "
+                f"(240x320 is the project default and satisfies this)."
+            )
+
+        skips = []
+        for enc in self.encoders:
+            x = enc(x)
+            skips.append(x)
+            x = self.pool(x)
+
+        x = self.bottleneck(x)
+
+        aux = []
+        for i, (dec, skip) in enumerate(zip(self.decoders, reversed(skips))):
+            x = dec(x, skip)
+            if self.deep_supervision and self.training and i < len(self.side_heads):
+                side = self.side_heads[i](x)
+                aux.append(F.interpolate(side, size=(h, w), mode="bilinear",
+                                         align_corners=False))
+
+        return self.seg_head(x), self.edge_head(x), aux
