@@ -7,6 +7,8 @@ import time # timer
 from hed_unet import HEDUNet # HED-UNet model
 from coastline_dataset import letterbox # same no-stretch resize + padding as training
 from train_hed_unet import CLASS_NAMES, NUM_CLASSES, coastline_from_label # same classes + coastline rule as training
+from coastline_lines import thin_band, refine_subpixel, trace_segments, to_original # band -> thin lines
+from scipy.spatial import cKDTree # nearest-point distances for coastline error
 
 print("STARTED")
 
@@ -79,6 +81,39 @@ xs_full = (xs - pad_x + 0.5) * scale - 0.5
 ys_full = (ys - pad_y + 0.5) * scale - 0.5
 ys_true, xs_true = np.nonzero(truth_edge_full) # true coastline at full resolution
 
+# thin line: band -> 1 px center line -> sub-pixel refined -> ordered segments, then back to original pixels
+line = thin_band(edge_np)
+line_xs, line_ys, refined = refine_subpixel(line, edge_prob, edge_np)
+refined_at = {(x, y): r for x, y, r in zip(line_xs, line_ys, refined)} # line pixel -> refined position
+segments = [to_original([refined_at[(int(x), int(y))] for x, y in seg], scale, pad_x, pad_y)
+            for seg in trace_segments(line)]
+line_full = to_original(refined, scale, pad_x, pad_y) if len(refined) else np.zeros((0, 2))
+line_pixels_full = to_original(np.column_stack([line_xs, line_ys]), scale, pad_x, pad_y) if len(line_xs) else np.zeros((0, 2))
+
+# exact true coastline = midpoints between neighboring land and water pixels at full resolution
+lw = np.isin(truth_full, [1, 2]) # water or land
+pair_x = lw[:, :-1] & lw[:, 1:] & (truth_full[:, :-1] != truth_full[:, 1:]) # left-right land/water pairs
+pair_y = lw[:-1, :] & lw[1:, :] & (truth_full[:-1, :] != truth_full[1:, :]) # up-down land/water pairs
+ty, tx = np.nonzero(pair_x); uy, ux = np.nonzero(pair_y)
+true_boundary = np.concatenate([np.column_stack([tx + 0.5, ty]), np.column_stack([ux, uy + 0.5])])
+
+# coastline error in original pixels and milliradians (camera from case_type 3000 in functions.py)
+FOCAL_LEN_MM, PIXEL_SIZE_MM = 35, 4.96e-3
+MRAD_PER_PIXEL = PIXEL_SIZE_MM / FOCAL_LEN_MM * 1000
+if len(true_boundary) and len(line_full):
+    tree = cKDTree(true_boundary)
+    err_pix = tree.query(line_pixels_full)[0] # thin line, no sub-pixel
+    err_sub = tree.query(line_full)[0] # thin line, sub-pixel refined
+    found = cKDTree(line_full).query(true_boundary)[0] <= scale # true coastline with a line point within 1 model pixel
+    print(f"Coastline line: {len(segments)} segments, {len(line_full)} points "
+          f"(1 original pixel = {MRAD_PER_PIXEL:.3f} mrad)")
+    for name, e in [("thin line (pixel centers)", err_pix), ("thin line (sub-pixel)   ", err_sub)]:
+        print(f"  {name}: error median {np.median(e):.2f} px ({np.median(e) * MRAD_PER_PIXEL:.3f} mrad), "
+              f"mean {e.mean():.2f} px, 90% under {np.percentile(e, 90):.2f} px")
+    print(f"  true coastline found (line within 1 model pixel = {scale:.0f} px): {100 * found.mean():.0f}%\n")
+else:
+    print("No coastline in this image (or none predicted)\n")
+
 # Plot 1 - model view (256 x 256)
 plt.figure(figsize=(15, 9))
 plots = [
@@ -99,8 +134,10 @@ plt.suptitle("space = black, water = blue, land = green, cloud = white, dark = p
 # Plot 2 - coastlines overlaid on the ORIGINAL full resolution image
 plt.figure(figsize=(12, 9))
 plt.imshow(np.array(image_full))
-plt.scatter(xs_full, ys_full, s=4, c="red", marker="s", linewidths=0, label="predicted coastline (model pixels)")
+plt.scatter(xs_full, ys_full, s=4, c="red", marker="s", linewidths=0, alpha=0.5, label="predicted band (model pixels)")
 plt.scatter(xs_true, ys_true, s=0.3, c="lime", linewidths=0, label="true coastline (full resolution)")
+for i, seg in enumerate(segments): # thin predicted line, one connected piece per visible stretch of coast
+    plt.plot(seg[:, 0], seg[:, 1], c="cyan", linewidth=1, label="predicted line (thinned, sub-pixel)" if i == 0 else None)
 plt.title(f"Coastline overlay on original image ({image_full.width} x {image_full.height})")
 plt.legend(loc="lower right", markerscale=4)
 plt.axis("off")
