@@ -9958,3 +9958,147 @@ def gen_moon_earthCLOUDMASK(sc_eph, time_eph, camera_definition, iter, ocean_ref
     # plt.show()
 # end render------------------------------------------------
     return scene_file, earth_map, cloud_map
+
+
+def gen_earth_label_renders(sc_eph, time_eph, camera_definition, iter, lookat_input=[], sky_vec_input=[], scenario=[], month_number=[], day=[], hour=[]):
+    # renders the 4 flat "ingredient" images needed to build a multi-class label map
+    # (see src/make_label_masks.py) using the SAME camera, Earth rotation, cloud map and sun as gen_moon_earth:
+    #   earth_img_LANDFLAT<iter>.png  - color_oceanblack map with NO lighting (ocean black, land colored, night side included)
+    #   earth_img_CLOUDFLAT<iter>.png - cloud map value with NO lighting (brightness = cloud coverage 0-1)
+    #   earth_img_DISK<iter>.png      - Earth as a flat white disk (white = Earth, black = space)
+    #   earth_img_LIT<iter>.png       - plain white Earth lit by the sun (bright = day side, black = night side)
+    # only for look_at_object == 'EARTH'
+
+    print('Start of label renders')
+    start = timeit.default_timer()
+
+    year = spice.timout(time_eph, 'YYYY')
+    month = spice.timout(time_eph, 'MON')
+
+    R_Earth = 6378.1
+    R_Earth_pole = 6356.8  # km
+
+    sc_pos = sc_eph
+    sun = spice.spkpos("10", time_eph, "J2000", "NONE", "399")
+    sun_pos_e = [sun[0][0], sun[0][1], sun[0][2]]
+    rotm_earth = spice.pxform("J2000", "IAU_EARTH", time_eph)
+
+    # same cloud map selection as gen_moon_earth
+    if np.size(day) == 0:
+        cloud_map = []
+        color_clouds_fileq = '"' + os.path.join(os.getcwd(), "Maps/earth/clouds.jpg") + '"'
+    else:
+        cloud_map = str(year) + "-" + str(int(month_number)).zfill(2) + "-" + str(int(day)).zfill(2) + \
+            "T" + str(int(hour)).zfill(2) + "-00-00.000Z.jpg"
+        color_clouds_fileq = '"' + os.path.join(os.getcwd(), "Maps/clouds/allyear/" + cloud_map) + '"'
+
+    # same monthly land/ocean map as gen_moon_earthMASK
+    month_files = {'JAN': 'jan', 'FEB': 'feb', 'MAR': 'mar', 'APR': 'apr', 'MAY': 'may', 'JUN': 'jun',
+                   'JUL': 'jul', 'AUG': 'aug', 'SEP': 'sept', 'OCT': 'oct', 'NOV': 'nov', 'DEC': 'dec'}
+    earth_map = "earth_" + month_files[month] + ".jpg"
+    color_oceanblack_month = '"' + os.path.join(
+        os.getcwd(), "Maps/color_ocean/color_oceanblack_" + month_files[month] + ".jpg") + '"'
+
+    earth_rotation = (
+        '       rotate -90*x scale <1,1,-1> rotate 180*z\n'
+        '       matrix <' + str(rotm_earth[0][0]) + ',' + str(rotm_earth[0][1]) + ',' + str(rotm_earth[0][2]) + ','
+        + str(rotm_earth[1][0]) + ',' + str(rotm_earth[1][1]) + ',' + str(rotm_earth[1][2]) + ','
+        + str(rotm_earth[2][0]) + ',' + str(rotm_earth[2][1]) + ',' + str(rotm_earth[2][2]) + ', 0, 0, 0>\n')
+    earth_scale = '       scale <1., ' + str(R_Earth_pole/R_Earth) + ', 1.>\n'
+    flat = 'finish{ambient 1 diffuse 0}' # flat = color ignores sun, shadows and night side
+
+    # one Earth sphere object per render
+    objects = {
+        'LANDFLAT':
+            'sphere {\n'
+            '       <0, 0, 0>, 3.5\n' + earth_scale +
+            '       texture { pigment{ image_map{ jpeg ' + color_oceanblack_month + ' gamma 1.0 map_type 1 } } ' + flat + ' }\n'
+            + earth_rotation + '}\n',
+        'CLOUDFLAT': # same radius as the clouds shell in gen_moon_earth, drawn opaque so pixel = cloud map value
+            'sphere {\n'
+            '       <0, 0, 0>, 3.5004\n' + earth_scale +
+            '       texture { pigment{ image_pattern{ jpeg ' + color_clouds_fileq + ' map_type 1 }\n'
+            '           color_map{ [0.0 color rgb 0] [1.0 color rgb 1] } } ' + flat + ' }\n'
+            + earth_rotation + '}\n',
+        'DISK':
+            'sphere {\n'
+            '       <0, 0, 0>, 3.5\n' + earth_scale +
+            '       texture { pigment{ color rgb 1 } ' + flat + ' }\n'
+            + earth_rotation + '}\n',
+        'LIT':
+            'sphere {\n'
+            '       <0, 0, 0>, 3.5\n' + earth_scale +
+            '       texture { pigment{ color rgb 1 } finish{ambient 0 diffuse 1} }\n'
+            + earth_rotation + '}\n',
+    }
+
+    # camera - same as gen_moon_earthMASK
+    look_at_object, focal_len, cam_width, cam_height, px = camera_definition
+    fov_angle = 2*math.atan2(px*cam_width/2, focal_len)*180/math.pi
+    if len(lookat_input) == 0:
+        look_at = [0, 0, 0]
+    else:
+        lookat_input = lookat_input.flatten()
+        look_at = [lookat_input[0]/R_Earth*3.5, lookat_input[1]/R_Earth*3.5, lookat_input[2]/R_Earth*3.5]
+    if len(sky_vec_input) == 0:
+        sc2obj = np.array(look_at)-np.array(sc_pos)/R_Earth*3.5
+        sc2obj = sc2obj/np.linalg.norm(sc2obj)
+        if norm(np.cross(sc2obj, np.array((0, 0, 1)))) < 1e-14:
+            x_b = np.array((1, 0, 0))
+            z_b = np.cross(x_b, sc2obj)
+            sky_vec = '<' + str(z_b[0]) + ',' + str(z_b[1]) + ',' + str(z_b[2]) + '>'
+        else:
+            sky_vec = 'z'
+    else:
+        sky_vec = '<' + str(sky_vec_input[0]) + ',' + str(sky_vec_input[1]) + ',' + str(sky_vec_input[2]) + '>'
+    camera = ('camera {\n'
+              '    right <-' + str(cam_width/cam_height) + ',0,0>\n'
+              '    up z\n'
+              '    direction z\n'
+              '    sky ' + sky_vec + '\n'
+              '    angle ' + str(fov_angle) + '\n'
+              '    location <' + str(sc_pos[0]/R_Earth*3.5) + ',' + str(sc_pos[1]/R_Earth*3.5) + ',' + str(sc_pos[2]/R_Earth*3.5) + '>\n'
+              '    look_at <' + str(look_at[0]) + ',' + str(look_at[1]) + ',' + str(look_at[2]) + '>\n'
+              '}\n')
+    light = ('light_source { \n'
+             '    <' + str(sun_pos_e[0]/R_Earth*3.5) + ',' + str(sun_pos_e[1]/R_Earth*3.5) + ',' + str(sun_pos_e[2]/R_Earth*3.5) + '>\n'
+             '    color rgb 2.4\n'
+             '}\n')
+
+    suffix = str(int(iter)) if scenario == [] else str(int(iter)) + "_" + str(int(scenario))
+    scene_files = {}
+    for kind, obj in objects.items():
+        pov_name = "tmp_" + kind + "_" + suffix + ".pov"
+        ini_name = "tmp_" + kind + "_" + suffix + ".ini"
+        scene_file = os.path.join(os.getcwd(), "earth_img_" + kind + suffix + ".png")
+
+        with open(pov_name, 'w') as pov_file:
+            pov_file.write('#version 3.7;\n'
+                           'global_settings { assumed_gamma 1.0 ambient_light rgb 1 }\n'
+                           'background { color rgb 0 }\n')
+            pov_file.write(obj)
+            pov_file.write(camera)
+            pov_file.write(light)
+
+        # no antialiasing so labels stay crisp, gamma 1 so pixel values = raw map values (thresholds mean what they say)
+        with open(ini_name, 'w') as ini_file:
+            ini_file.write('Width=' + str(cam_width) + '\n'
+                           'Height=' + str(cam_height) + '\n'
+                           'Antialias=Off\n'
+                           'Display=Off\n'
+                           'Output_File_Type=N\n'
+                           'File_Gamma=1.0\n'
+                           'Input_File_Name="' + os.path.join(os.getcwd(), pov_name) + '"\n'
+                           'Output_File_Name="' + scene_file + '"\n')
+
+        if platform == 'win32':  # if on Windows platform
+            os.system('C:/PROGRA~1/POV-Ray/v3.7/bin/pvengine.exe /NR /RENDER ' +
+                      '"' + os.path.join(os.getcwd(), ini_name) + '" /EXIT')
+        else:
+            povray_location = subprocess.getoutput('which povray')
+            os.system(povray_location + ' "' + os.path.join(os.getcwd(), ini_name) + '"')
+        scene_files[kind] = scene_file
+
+    stop = timeit.default_timer()
+    print('End label renders - Total Time: ' + str("{:.2f}".format(stop - start)) + ' s')
+    return scene_files, earth_map, cloud_map

@@ -1,4 +1,6 @@
 import os #file finding/paths
+import numpy as np # label arrays
+import torch # label tensors
 from PIL import Image # open images
 from torch.utils.data import Dataset # pytorch dataset class - can feed images into nn
 import torchvision.transforms as T # image transformations (resizing)
@@ -60,3 +62,39 @@ class CoastlineDataset(Dataset): # create a dataset called coaslinedataset
         mask = (mask > 0.5).float()
 
         return image, mask # returning image and ground trth mask
+
+# multi-class version for HED-UNet: pairs earth_img_<N>.png with earth_img_LABEL<N>.png
+# label values: 0 space, 1 water, 2 land, 3 cloud, 4 dark (made by make_label_masks.py)
+class CoastlineLabelDataset(Dataset):
+    def __init__(self, image_dir, label_dir, img_size=(256, 256)):
+        self.image_dir = image_dir
+        self.label_dir = label_dir
+
+        # only plain images earth_img_<N>.png, skips MASK/LABEL/render files if they share the folder
+        self.image_files = sorted([
+            f for f in os.listdir(image_dir)
+            if f.startswith("earth_img_") and f.endswith(".png")
+            and f[len("earth_img_"):-len(".png")].replace("_", "").isdigit()
+        ])
+
+        self.image_transform = T.Compose([
+            T.Resize(img_size),
+            T.ToTensor()
+        ])
+        # nearest so class numbers never get blended into in-between values
+        self.label_resize = T.Resize(img_size, interpolation=InterpolationMode.NEAREST)
+
+    def __len__(self):
+        return len(self.image_files)
+
+    def __getitem__(self, idx):
+        img_name = self.image_files[idx]
+        number = img_name.replace("earth_img_", "").replace(".png", "")
+
+        image = Image.open(os.path.join(self.image_dir, img_name)).convert("RGB")
+        label = Image.open(os.path.join(self.label_dir, f"earth_img_LABEL{number}.png")) # keep raw class numbers, no convert
+
+        image = self.image_transform(image)
+        label = torch.from_numpy(np.array(self.label_resize(label), dtype=np.int64)) # [H, W] class numbers
+
+        return image, label

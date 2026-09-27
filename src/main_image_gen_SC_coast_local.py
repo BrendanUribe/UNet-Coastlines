@@ -191,6 +191,9 @@ for idx_month,month in enumerate(list_months):
                     sc_pos, sim_date, camera_definition, iter, reflection, month_number=month, day=day, hour=hour)
                 scene_file, earth_map, cloud_map = gen_moon_earthCLOUDMASK(
                     sc_pos, sim_date, camera_definition, iter, reflection, month_number=month, day=day, hour=hour)
+            # flat renders (land, cloud, disk, sunlit) combined into earth_img_LABEL<N>.png by make_label_masks.py
+                gen_earth_label_renders(
+                    sc_pos, sim_date, camera_definition, iter, month_number=month, day=day, hour=hour)
                 print(scene_file)
                 print(earth_map)
                 print(cloud_map)

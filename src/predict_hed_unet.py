@@ -2,21 +2,27 @@ import torch
 from PIL import Image # image opening
 import torchvision.transforms as T # preprocessing tools for resizing and converting images to tensors
 import matplotlib.pyplot as plt # plotting
-import numpy as np # math, IoU, Dice
+import numpy as np # math, IoU
 import time # timer
 from hed_unet import HEDUNet # HED-UNet model
+from train_hed_unet import CLASS_NAMES, NUM_CLASSES, coastline_from_label # same classes + coastline rule as training
 
 print("STARTED")
+
+# colors for plotting class maps: space, water, land, cloud, dark
+CLASS_COLORS = np.array([[0, 0, 0], [30, 60, 200], [40, 160, 60], [230, 230, 230], [90, 60, 110]], dtype=np.uint8)
 
 # Load model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-model = HEDUNet(in_channels=3, out_channels=2).to(device) # rgb to mask + coastline edge
-model.load_state_dict(torch.load("hedunet_256_100ep.pth", map_location=device)) # must match .pth name from train_hed_unet.py
+model = HEDUNet(in_channels=3, out_channels=NUM_CLASSES + 1).to(device) # rgb to 5 classes + coastline
+model.load_state_dict(torch.load("hedunet_multiclass_256_100ep.pth", map_location=device)) # must match .pth name from train_hed_unet.py
 model.eval() # evaluation mode for predicting not training
 
 # Load image can change number to desired image
-img_path = "dataset/images/earth_img_0.png"
+number = "0"
+img_path = f"dataset/images/earth_img_{number}.png"
+label_path = f"dataset/labels/earth_img_LABEL{number}.png"
 image = Image.open(img_path).convert("RGB")
 
 transform = T.Compose([
@@ -33,57 +39,45 @@ model_start = time.time()
 # Predict
 with torch.inference_mode():
     combined, _ = model(input_tensor) # only need the merged output, per-level outputs are for training
-    prob = torch.sigmoid(combined)[0] # [2, H, W] probabilities
-    mask_np = (prob[0] > 0.5).float().cpu().numpy() # channel 0 = land/water mask
-    edge_prob = prob[1].cpu().numpy() # channel 1 = coastline probability
-    edge_np = (prob[1] > 0.5).float().cpu().numpy() # coastline predicted directly by the model (no Canny)
+    class_map = combined[0, :NUM_CLASSES].argmax(dim=0).cpu().numpy() # most likely class per pixel
+    edge_prob = torch.sigmoid(combined[0, NUM_CLASSES]).cpu().numpy() # coastline probability
+    edge_np = (edge_prob > 0.5).astype(np.uint8) # coastline predicted directly by the model
 
 model_time = time.time() - model_start
 
-# Load truth mask for same image
-truth_path = "dataset/masks/earth_img_MASK0.png"
-truth = Image.open(truth_path).convert("L")
+# Load truth label map for same image (nearest resize keeps class numbers)
+truth = np.array(T.Resize((256, 256), interpolation=T.InterpolationMode.NEAREST)(Image.open(label_path)))
+truth_edge = coastline_from_label(torch.from_numpy(truth.astype(np.int64))[None])[0, 0].numpy()
 
-truth_transform = T.Compose([
-    T.Resize((256, 256), interpolation=T.InterpolationMode.NEAREST),
-    T.Grayscale(num_output_channels=1),
-    T.ToTensor()
-])
+# IoU per class - overlap / total area for each class
+print("IoU per class:")
+for c, name in enumerate(CLASS_NAMES):
+    pred_c, truth_c = class_map == c, truth == c
+    union = np.logical_or(pred_c, truth_c).sum()
+    if union > 0:
+        print(f"  {name:6s}: {np.logical_and(pred_c, truth_c).sum() / union:.4f}")
+    else:
+        print(f"  {name:6s}: not in image")
 
-truth_bin = (truth_transform(truth).squeeze().numpy() > 0.5).astype(np.uint8)
-pred_bin = mask_np.astype(np.uint8)
-
-# IoU and Dice on the mask - same as predict_unet.py so results are comparable
-intersection = np.logical_and(pred_bin, truth_bin).sum()
-union = np.logical_or(pred_bin, truth_bin).sum()
-iou = intersection / union if union > 0 else 0
-dice = (2 * intersection) / (pred_bin.sum() + truth_bin.sum()) if (pred_bin.sum() + truth_bin.sum()) > 0 else 0
-
-print(f"IoU Score: {iou:.4f}")
-print(f"Dice Score: {dice:.4f}")
-print(f"\nModel inference time (mask + coastline): {model_time:.4f} sec\n")
+print(f"\nPixel accuracy: {(class_map == truth).mean():.4f}")
+print(f"\nModel inference time (classes + coastline): {model_time:.4f} sec\n")
 
 # Plot results
-plt.figure(figsize=(16, 4))
+plt.figure(figsize=(18, 7))
 
-plt.subplot(1, 4, 1)
-plt.title("RGB Image")
-plt.imshow(image_plot)
-plt.axis("off")
+plots = [
+    ("RGB Image", image_plot, {}),
+    ("True Classes", CLASS_COLORS[truth], {}),
+    ("Predicted Classes", CLASS_COLORS[class_map], {}),
+    ("True Coastline", truth_edge, dict(cmap="gray")),
+    ("Coastline Probability", edge_prob, dict(cmap="gray", vmin=0, vmax=1)),
+    ("Predicted Coastline", edge_np, dict(cmap="gray")),
+]
+for i, (title, img, kwargs) in enumerate(plots):
+    plt.subplot(2, 3, i + 1)
+    plt.title(title)
+    plt.imshow(img, **kwargs)
+    plt.axis("off")
 
-plt.subplot(1, 4, 2)
-plt.title("Predicted Mask")
-plt.imshow(mask_np, cmap="gray")
-plt.axis("off")
-
-plt.subplot(1, 4, 3)
-plt.title("Coastline Probability")
-plt.imshow(edge_prob, cmap="gray", vmin=0, vmax=1)
-plt.axis("off")
-
-plt.subplot(1, 4, 4)
-plt.title("Predicted Coastline")
-plt.imshow(edge_np, cmap="gray")
-plt.axis("off")
-
+plt.suptitle("space = black, water = blue, land = green, cloud = white, dark = purple")
 plt.show()
