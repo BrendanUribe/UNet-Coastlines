@@ -61,7 +61,7 @@ if __name__ == "__main__":
     dataset = CoastlineLabelDataset(
         image_dir="dataset/images",
         label_dir="dataset/labels",
-        img_size=256 # square side fed to model, make sure this matches prediction (IMG_SIZE in predict_hed_unet.py)
+        img_size=512 # square side fed to model, make sure this matches prediction (IMG_SIZE in predict_hed_unet.py)
     )
     # loader batch can change rn 4 images at a time and shuffle for randomly mixed each epoch
     loader = DataLoader(
@@ -120,7 +120,7 @@ if __name__ == "__main__":
             print(f"Checkpoint saved at epoch {epoch+1}")
 
     # Save model
-    torch.save(model.state_dict(), "hedunet_multiclass_256_100ep.pth") # change .pth name (hedunet_multiclass_<res>_<epochs>ep_<date>.pth)
+    torch.save(model.state_dict(), "hedunet_multiclass_512_100ep.pth") # change .pth name (hedunet_multiclass_<res>_<epochs>ep_<date>.pth)
     print("Model saved")
 
     # TOTAL TIMER END

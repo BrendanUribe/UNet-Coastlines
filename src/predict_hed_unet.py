@@ -10,7 +10,7 @@ from train_hed_unet import CLASS_NAMES, NUM_CLASSES, coastline_from_label # same
 
 print("STARTED")
 
-IMG_SIZE = 256 # must match img_size in train_hed_unet.py
+IMG_SIZE = 512 # must match img_size in train_hed_unet.py
 
 # colors for plotting class maps: space, water, land, cloud, dark
 CLASS_COLORS = np.array([[0, 0, 0], [30, 60, 200], [40, 160, 60], [230, 230, 230], [90, 60, 110]], dtype=np.uint8)
@@ -19,7 +19,7 @@ CLASS_COLORS = np.array([[0, 0, 0], [30, 60, 200], [40, 160, 60], [230, 230, 230
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 model = HEDUNet(in_channels=3, out_channels=NUM_CLASSES + 1).to(device) # rgb to 5 classes + coastline
-model.load_state_dict(torch.load("hedunet_multiclass_256_100ep.pth", map_location=device)) # must match .pth name from train_hed_unet.py
+model.load_state_dict(torch.load("hedunet_multiclass_512_100ep.pth", map_location=device)) # must match .pth name from train_hed_unet.py
 model.eval() # evaluation mode for predicting not training
 
 # Load image can change number to desired image
