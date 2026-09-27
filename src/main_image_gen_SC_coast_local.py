@@ -58,13 +58,13 @@ total_idx = 1 # get total number of tasks 2
 # phi_all = np.linspace(-80, 80, num=num_phi)*(math.pi/180)
 # dist_all = np.hstack((50000,70000,90000,125000,175000,225000,275000))
 
-num_theta = 1
-num_phi = 2
+num_theta = 8
+num_phi = 3
 
 theta_all = np.linspace(0, 330, num_theta) * (math.pi/180)
 phi_all   = np.linspace(-60, 60, num_phi) * (math.pi/180)
 
-dist_all = np.array([75000])
+dist_all = np.array([75000, 100000])
 
 #List of cloud maps
 # list_hours = np.arange(0,24,3)

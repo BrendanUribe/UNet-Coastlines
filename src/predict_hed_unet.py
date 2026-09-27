@@ -20,7 +20,7 @@ model.load_state_dict(torch.load("hedunet_multiclass_256_100ep.pth", map_locatio
 model.eval() # evaluation mode for predicting not training
 
 # Load image can change number to desired image
-number = "0"
+number = "23"
 img_path = f"dataset/images/earth_img_{number}.png"
 label_path = f"dataset/labels/earth_img_LABEL{number}.png"
 image = Image.open(img_path).convert("RGB")
@@ -70,8 +70,8 @@ plots = [
     ("True Classes", CLASS_COLORS[truth], {}),
     ("Predicted Classes", CLASS_COLORS[class_map], {}),
     ("True Coastline", truth_edge, dict(cmap="gray")),
-    ("Coastline Probability", edge_prob, dict(cmap="gray", vmin=0, vmax=1)),
-    ("Predicted Coastline", edge_np, dict(cmap="gray")),
+    #("Coastline Probability", edge_prob, dict(cmap="gray", vmin=0, vmax=1)),
+    #("Predicted Coastline", edge_np, dict(cmap="gray")),
 ]
 for i, (title, img, kwargs) in enumerate(plots):
     plt.subplot(2, 3, i + 1)
