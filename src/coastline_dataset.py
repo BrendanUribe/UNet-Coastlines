@@ -63,12 +63,26 @@ class CoastlineDataset(Dataset): # create a dataset called coaslinedataset
 
         return image, mask # returning image and ground trth mask
 
+def letterbox(img, size, resample): # shrink keeping shape (no stretching), then pad to a size x size square with black
+    # returns padded image + (scale, pad_x, pad_y) so pixels can be mapped back to the original image:
+    #   x_original = (x_small - pad_x + 0.5) * scale - 0.5, same for y
+    w, h = img.size
+    scale = max(w, h) / size # original pixels per small pixel, same in x and y
+    new_w, new_h = round(w / scale), round(h / scale)
+    pad_x, pad_y = (size - new_w) // 2, (size - new_h) // 2
+    canvas = Image.new(img.mode, (size, size), 0) # 0 = black = space class
+    canvas.paste(img.resize((new_w, new_h), resample), (pad_x, pad_y))
+    return canvas, (scale, pad_x, pad_y)
+
+
 # multi-class version for HED-UNet: pairs earth_img_<N>.png with earth_img_LABEL<N>.png
 # label values: 0 space, 1 water, 2 land, 3 cloud, 4 dark (made by make_label_masks.py)
+# images are letterboxed (shrunk without stretching + padded with space) so geometry stays correct
 class CoastlineLabelDataset(Dataset):
-    def __init__(self, image_dir, label_dir, img_size=(256, 256)):
+    def __init__(self, image_dir, label_dir, img_size=256): # img_size = side of the square fed to the model
         self.image_dir = image_dir
         self.label_dir = label_dir
+        self.img_size = img_size
 
         # only plain images earth_img_<N>.png, skips MASK/LABEL/render files if they share the folder
         self.image_files = sorted([
@@ -76,13 +90,6 @@ class CoastlineLabelDataset(Dataset):
             if f.startswith("earth_img_") and f.endswith(".png")
             and f[len("earth_img_"):-len(".png")].replace("_", "").isdigit()
         ])
-
-        self.image_transform = T.Compose([
-            T.Resize(img_size),
-            T.ToTensor()
-        ])
-        # nearest so class numbers never get blended into in-between values
-        self.label_resize = T.Resize(img_size, interpolation=InterpolationMode.NEAREST)
 
     def __len__(self):
         return len(self.image_files)
@@ -94,7 +101,10 @@ class CoastlineLabelDataset(Dataset):
         image = Image.open(os.path.join(self.image_dir, img_name)).convert("RGB")
         label = Image.open(os.path.join(self.label_dir, f"earth_img_LABEL{number}.png")) # keep raw class numbers, no convert
 
-        image = self.image_transform(image)
-        label = torch.from_numpy(np.array(self.label_resize(label), dtype=np.int64)) # [H, W] class numbers
+        image, _ = letterbox(image, self.img_size, Image.BILINEAR)
+        label, _ = letterbox(label, self.img_size, Image.NEAREST) # nearest so class numbers never get blended
+
+        image = T.functional.to_tensor(image)
+        label = torch.from_numpy(np.array(label, dtype=np.int64)) # [H, W] class numbers
 
         return image, label
