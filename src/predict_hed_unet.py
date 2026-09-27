@@ -6,7 +6,7 @@ import numpy as np # math, IoU
 import time # timer
 from hed_unet import HEDUNet # HED-UNet model
 from coastline_dataset import letterbox # same no-stretch resize + padding as training
-from train_hed_unet import CLASS_NAMES, NUM_CLASSES, coastline_from_label # same classes + coastline rule as training
+from train_hed_unet import CLASS_NAMES, NUM_CLASSES, MERGE_DARK, prepare_labels, coastline_from_label # same classes + coastline rule as training
 from coastline_lines import thin_band, refine_subpixel, trace_segments, to_original # band -> thin lines
 from scipy.spatial import cKDTree # nearest-point distances for coastline error
 
@@ -20,7 +20,7 @@ CLASS_COLORS = np.array([[0, 0, 0], [30, 60, 200], [40, 160, 60], [230, 230, 230
 # Load model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-model = HEDUNet(in_channels=3, out_channels=NUM_CLASSES + 1).to(device) # rgb to 5 classes + coastline
+model = HEDUNet(in_channels=3, out_channels=NUM_CLASSES + 1).to(device) # rgb to classes + coastline
 model.load_state_dict(torch.load("hedunet_multiclass_512_100ep.pth", map_location=device)) # must match .pth name from train_hed_unet.py
 model.eval() # evaluation mode for predicting not training
 
@@ -51,9 +51,9 @@ with torch.inference_mode():
 model_time = time.time() - model_start
 
 # truth at model size (for class scores) and at FULL resolution (for the overlay)
-truth = np.array(label_small)
+truth = prepare_labels(np.array(label_small)) # same MERGE_DARK as training
 truth_edge = coastline_from_label(torch.from_numpy(truth.astype(np.int64))[None])[0, 0].numpy()
-truth_full = np.array(label_full)
+truth_full = prepare_labels(np.array(label_full))
 truth_edge_full = coastline_from_label(torch.from_numpy(truth_full.astype(np.int64))[None])[0, 0].numpy()
 
 # only score the real image area, not the black padding added by letterbox
@@ -67,9 +67,9 @@ for c, name in enumerate(CLASS_NAMES):
     pred_c, truth_c = (class_map == c) & valid, (truth == c) & valid
     union = np.logical_or(pred_c, truth_c).sum()
     if union > 0:
-        print(f"  {name:6s}: {np.logical_and(pred_c, truth_c).sum() / union:.4f}")
+        print(f"  {name:10s}: {np.logical_and(pred_c, truth_c).sum() / union:.4f}")
     else:
-        print(f"  {name:6s}: not in image")
+        print(f"  {name:10s}: not in image")
 
 print(f"\nPixel accuracy: {(class_map == truth)[valid].mean():.4f}")
 print(f"\nModel inference time (classes + coastline): {model_time:.4f} sec")
@@ -129,7 +129,8 @@ for i, (title, img, kwargs) in enumerate(plots):
     plt.title(title)
     plt.imshow(img, **kwargs)
     plt.axis("off")
-plt.suptitle("space = black, water = blue, land = green, cloud = white, dark = purple")
+plt.suptitle("space/dark = black, water = blue, land = green, cloud = white" if MERGE_DARK
+             else "space = black, water = blue, land = green, cloud = white, dark = purple")
 
 # Plot 2 - coastlines overlaid on the ORIGINAL full resolution image
 plt.figure(figsize=(12, 9))

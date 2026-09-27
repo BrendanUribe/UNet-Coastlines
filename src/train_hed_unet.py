@@ -8,11 +8,22 @@ import time # timer
 
 STACK_HEIGHT = 5 # number of down/up levels in HED-UNet, img_size must be divisible by 2**STACK_HEIGHT
 
-# classes in the label maps (from make_label_masks.py)
-CLASS_NAMES = ["space", "water", "land", "cloud", "dark"]
+# classes in the label maps (from make_label_masks.py): 0 space, 1 water, 2 land, 3 cloud, 4 dark
+# MERGE_DARK = True treats night side (4) as space (0): both are pure black in the images, so the model
+# can only tell them apart by the disk shape, which failed at 512 res. label files keep all 5 classes,
+# set False (and retrain) to split them again
+MERGE_DARK = True
+CLASS_NAMES = ["space/dark", "water", "land", "cloud"] if MERGE_DARK else ["space", "water", "land", "cloud", "dark"]
 NUM_CLASSES = len(CLASS_NAMES)
-WATER, LAND = 1, 2
-# model output channels: 0-4 = class scores, 5 = coastline edge
+SPACE, WATER, LAND, DARK = 0, 1, 2, 4
+
+
+def prepare_labels(label): # apply MERGE_DARK to a label tensor or numpy array (returns a copy)
+    label = label.clone() if torch.is_tensor(label) else label.copy()
+    if MERGE_DARK:
+        label[label == DARK] = SPACE
+    return label
+# model output channels: 0 to NUM_CLASSES-1 = class scores, last = coastline edge
 
 
 def coastline_from_label(label): # label [B,H,W] -> coastline [B,1,H,W] of 0/1
@@ -75,7 +86,7 @@ if __name__ == "__main__":
     # Model - cuda for nvidia not amd
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # creates HED-UNet model 3 channel rgb to 5 class scores + 1 coastline channel
+    # creates HED-UNet model 3 channel rgb to class scores (4 or 5, see MERGE_DARK) + 1 coastline channel
     model = HEDUNet(in_channels=3, out_channels=NUM_CLASSES + 1, stack_height=STACK_HEIGHT).to(device)
 
     optimizer = optim.Adam(model.parameters(), lr=1e-3) # HED-UNet default lr
@@ -93,7 +104,7 @@ if __name__ == "__main__":
 
         for images, labels in loader:
             images = images.to(device)
-            labels = labels.to(device)
+            labels = prepare_labels(labels).to(device)
 
             combined, levels = model(images)
             targets = get_targets(labels)
