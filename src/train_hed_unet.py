@@ -37,17 +37,20 @@ def get_targets(label): # builds (class map, coastline) targets at every scale t
     return targets # full size first, same order as model's level outputs
 
 
-def auto_weight_bce(logits, target): # BCE that balances classes per image (coastline pixels are rare)
+def coastline_bce(logits, target, max_weight=10.0): # BCE that boosts rare coastline pixels, capped
+    # coastline is ~1-2% of pixels, so missed coastline pixels are weighted up to max_weight x more
+    # (full balancing = ~65x made the model mark almost the whole Earth as coastline, cap keeps it thin)
     with torch.no_grad():
-        beta = target.mean(dim=[2, 3], keepdim=True) # fraction of coastline pixels per image
-    return (-(1 - beta) * target * F.logsigmoid(logits)
-            - beta * (1 - target) * F.logsigmoid(-logits)).mean()
+        beta = target.mean(dim=[2, 3], keepdim=True).clamp(min=1e-6) # fraction of coastline pixels per image
+        pos_weight = ((1 - beta) / beta).clamp(max=max_weight)
+    return (-pos_weight * target * F.logsigmoid(logits)
+            - (1 - target) * F.logsigmoid(-logits)).mean()
 
 
 def hed_loss(prediction, target): # class loss + coastline loss for one scale
     label, edge = target
     class_loss = F.cross_entropy(prediction[:, :NUM_CLASSES], label)
-    edge_loss = auto_weight_bce(prediction[:, NUM_CLASSES:], edge)
+    edge_loss = coastline_bce(prediction[:, NUM_CLASSES:], edge)
     return class_loss + edge_loss
 
 
@@ -58,7 +61,7 @@ if __name__ == "__main__":
     dataset = CoastlineLabelDataset(
         image_dir="dataset/images",
         label_dir="dataset/labels",
-        img_size=(256, 256) # make sure this matches across dataset, training, prediction
+        img_size=256 # square side fed to model, make sure this matches prediction (IMG_SIZE in predict_hed_unet.py)
     )
     # loader batch can change rn 4 images at a time and shuffle for randomly mixed each epoch
     loader = DataLoader(
