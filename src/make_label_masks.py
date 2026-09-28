@@ -73,7 +73,14 @@ if __name__ == "__main__":
     )
     print(f"Found {len(numbers)} sets of renders -> {SPLIT} set ({IMAGE_DIR}, {LABEL_DIR})")
 
+    skipped = [] # views with a missing render (usually a missing cloud map for that date, so POV-Ray failed)
     for number in numbers:
+        needed = [f"earth_img_{number}.png"] + [f"earth_img_{kind}{number}.png" for kind in ("LANDFLAT", "CLOUDFLAT", "DISK", "LIT")]
+        missing = [f for f in needed if not os.path.exists(os.path.join(RENDER_DIR, f))]
+        if missing:
+            skipped.append(number)
+            print(f"{number}: SKIPPED, missing {', '.join(missing)}")
+            continue
         label = make_label(number)
         Image.fromarray(label).save(os.path.join(LABEL_DIR, f"earth_img_LABEL{number}.png"))
         shutil.copy(os.path.join(RENDER_DIR, f"earth_img_{number}.png"), os.path.join(IMAGE_DIR, f"earth_img_{number}.png"))
@@ -84,4 +91,6 @@ if __name__ == "__main__":
         print(f"{number}: space {fractions[0]:.2f}, water {fractions[1]:.2f}, land {fractions[2]:.2f}, "
               f"cloud {fractions[3]:.2f}, dark {fractions[4]:.2f}")
 
-    print("Done")
+    print(f"Done: {len(numbers) - len(skipped)} labeled, {len(skipped)} skipped")
+    if skipped:
+        print("Skipped views (render failed, usually a missing cloud map for that date):", ", ".join(skipped))
