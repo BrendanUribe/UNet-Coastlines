@@ -65,3 +65,31 @@ def to_original(points, scale, pad_x, pad_y): # model pixel coords [N, 2] (x, y)
     points = np.asarray(points, dtype=float)
     return np.column_stack([(points[:, 0] - pad_x + 0.5) * scale - 0.5,
                             (points[:, 1] - pad_y + 0.5) * scale - 0.5])
+
+
+# camera from case_type 3000 in functions.py: angle covered by one ORIGINAL image pixel
+FOCAL_LEN_MM, PIXEL_SIZE_MM = 35, 4.96e-3
+MRAD_PER_PIXEL = PIXEL_SIZE_MM / FOCAL_LEN_MM * 1000
+
+
+def predicted_line(edge_band, edge_prob, scale, pad_x, pad_y): # model band -> thin line in ORIGINAL pixels
+    # returns segments (list of [N, 2] arrays), sub-pixel points [N, 2], pixel-center points [N, 2]
+    line = thin_band(edge_band)
+    line_xs, line_ys, refined = refine_subpixel(line, edge_prob, edge_band)
+    if len(refined) == 0:
+        return [], np.zeros((0, 2)), np.zeros((0, 2))
+    refined_at = {(x, y): r for x, y, r in zip(line_xs, line_ys, refined)} # line pixel -> refined position
+    segments = [to_original([refined_at[(int(x), int(y))] for x, y in seg], scale, pad_x, pad_y)
+                for seg in trace_segments(line)]
+    return (segments, to_original(refined, scale, pad_x, pad_y),
+            to_original(np.column_stack([line_xs, line_ys]), scale, pad_x, pad_y))
+
+
+def true_boundary_points(label, water=1, land=2): # full res label map -> exact land/water boundary points [N, 2] (x, y)
+    # midpoints between neighboring land and water pixels
+    lw = np.isin(label, [water, land])
+    pair_x = lw[:, :-1] & lw[:, 1:] & (label[:, :-1] != label[:, 1:]) # left-right land/water pairs
+    pair_y = lw[:-1, :] & lw[1:, :] & (label[:-1, :] != label[1:, :]) # up-down land/water pairs
+    ty, tx = np.nonzero(pair_x)
+    uy, ux = np.nonzero(pair_y)
+    return np.concatenate([np.column_stack([tx + 0.5, ty]), np.column_stack([ux, uy + 0.5])]).astype(float)

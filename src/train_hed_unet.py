@@ -6,7 +6,9 @@ from hed_unet import HEDUNet # imports HED-UNet model
 import torch.optim as optim # optimizers
 import time # timer
 
-STACK_HEIGHT = 5 # number of down/up levels in HED-UNet, img_size must be divisible by 2**STACK_HEIGHT
+STACK_HEIGHT = 5 # number of down/up levels in HED-UNet, IMG_SIZE must be divisible by 2**STACK_HEIGHT
+IMG_SIZE = 512 # square side fed to model (long image side shrinks to this), predict/evaluate read it from here
+MODEL_PATH = "hedunet_multiclass_512_100ep.pth" # saved by training, loaded by predict/evaluate
 
 # classes in the label maps (from make_label_masks.py): 0 space, 1 water, 2 land, 3 cloud, 4 dark
 # MERGE_DARK = True treats night side (4) as space (0): both are pure black in the images, so the model
@@ -72,7 +74,7 @@ if __name__ == "__main__":
     dataset = CoastlineLabelDataset(
         image_dir="dataset/images",
         label_dir="dataset/labels",
-        img_size=512 # square side fed to model, make sure this matches prediction (IMG_SIZE in predict_hed_unet.py)
+        img_size=IMG_SIZE # set at top of file
     )
     # loader batch can change rn 4 images at a time and shuffle for randomly mixed each epoch
     loader = DataLoader(
@@ -131,7 +133,7 @@ if __name__ == "__main__":
             print(f"Checkpoint saved at epoch {epoch+1}")
 
     # Save model
-    torch.save(model.state_dict(), "hedunet_multiclass_512_100ep.pth") # change .pth name (hedunet_multiclass_<res>_<epochs>ep_<date>.pth)
+    torch.save(model.state_dict(), MODEL_PATH) # name set at top of file
     print("Model saved")
 
     # TOTAL TIMER END

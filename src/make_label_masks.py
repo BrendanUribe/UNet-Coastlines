@@ -5,12 +5,24 @@
 # coastline is NOT stored, training computes it from this map (land touching water only)
 
 import os # file finding/paths
+import sys # command line option (train / validation)
+import shutil # copy rgb images into the dataset folders
 import numpy as np # math
 from PIL import Image # open/save images
 
+# run:  python src/make_label_masks.py              -> training set   (dataset/images, dataset/labels)
+#       python src/make_label_masks.py validation   -> validation set (dataset/validation_images, dataset/validation_labels)
+# it processes EVERY render set in RENDER_DIR, so move old renders out before generating a new set
+SPLIT = sys.argv[1] if len(sys.argv) > 1 else "train"
 RENDER_DIR = "." # where the generator saved earth_img_LANDFLAT<N>.png etc (it saves in the working dir)
-LABEL_DIR = "dataset/labels" # where earth_img_LABEL<N>.png are written
-PREVIEW_DIR = "dataset/label_previews" # color versions to check by eye, set to None to skip
+if SPLIT == "validation":
+    IMAGE_DIR = "dataset/validation_images" # rgb images copied here
+    LABEL_DIR = "dataset/validation_labels" # earth_img_LABEL<N>.png written here
+    PREVIEW_DIR = "dataset/validation_label_previews" # color versions to check by eye, set to None to skip
+else:
+    IMAGE_DIR = "dataset/images"
+    LABEL_DIR = "dataset/labels"
+    PREVIEW_DIR = "dataset/label_previews"
 
 # thresholds (0-1 brightness) - tune if labels look wrong in the previews
 LAND_THRESHOLD = 0.08 # color_oceanblack map: ocean is black, anything brighter is land
@@ -46,6 +58,9 @@ def make_label(number):
 
 
 if __name__ == "__main__":
+    if SPLIT not in ("train", "validation"):
+        sys.exit(f"unknown option '{SPLIT}', use: python src/make_label_masks.py [validation]")
+    os.makedirs(IMAGE_DIR, exist_ok=True)
     os.makedirs(LABEL_DIR, exist_ok=True)
     if PREVIEW_DIR:
         os.makedirs(PREVIEW_DIR, exist_ok=True)
@@ -56,11 +71,12 @@ if __name__ == "__main__":
         for f in os.listdir(RENDER_DIR)
         if f.startswith("earth_img_DISK") and f.endswith(".png")
     )
-    print("Found", len(numbers), "sets of renders")
+    print(f"Found {len(numbers)} sets of renders -> {SPLIT} set ({IMAGE_DIR}, {LABEL_DIR})")
 
     for number in numbers:
         label = make_label(number)
         Image.fromarray(label).save(os.path.join(LABEL_DIR, f"earth_img_LABEL{number}.png"))
+        shutil.copy(os.path.join(RENDER_DIR, f"earth_img_{number}.png"), os.path.join(IMAGE_DIR, f"earth_img_{number}.png"))
         if PREVIEW_DIR:
             Image.fromarray(PREVIEW_COLORS[label]).save(os.path.join(PREVIEW_DIR, f"earth_img_LABEL{number}.png"))
 

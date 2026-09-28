@@ -6,13 +6,11 @@ import numpy as np # math, IoU
 import time # timer
 from hed_unet import HEDUNet # HED-UNet model
 from coastline_dataset import letterbox # same no-stretch resize + padding as training
-from train_hed_unet import CLASS_NAMES, NUM_CLASSES, MERGE_DARK, prepare_labels, coastline_from_label # same classes + coastline rule as training
-from coastline_lines import thin_band, refine_subpixel, trace_segments, to_original # band -> thin lines
+from train_hed_unet import CLASS_NAMES, NUM_CLASSES, MERGE_DARK, IMG_SIZE, MODEL_PATH, prepare_labels, coastline_from_label # same settings as training
+from coastline_lines import predicted_line, true_boundary_points, MRAD_PER_PIXEL # band -> thin lines + coastline error
 from scipy.spatial import cKDTree # nearest-point distances for coastline error
 
 print("STARTED")
-
-IMG_SIZE = 512 # must match img_size in train_hed_unet.py
 
 # colors for plotting class maps: space, water, land, cloud, dark
 CLASS_COLORS = np.array([[0, 0, 0], [30, 60, 200], [40, 160, 60], [230, 230, 230], [90, 60, 110]], dtype=np.uint8)
@@ -21,7 +19,7 @@ CLASS_COLORS = np.array([[0, 0, 0], [30, 60, 200], [40, 160, 60], [230, 230, 230
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 model = HEDUNet(in_channels=3, out_channels=NUM_CLASSES + 1).to(device) # rgb to classes + coastline
-model.load_state_dict(torch.load("hedunet_multiclass_512_100ep.pth", map_location=device)) # must match .pth name from train_hed_unet.py
+model.load_state_dict(torch.load(MODEL_PATH, map_location=device)) # name set in train_hed_unet.py
 model.eval() # evaluation mode for predicting not training
 
 # Load image can change number to desired image
@@ -81,25 +79,11 @@ xs_full = (xs - pad_x + 0.5) * scale - 0.5
 ys_full = (ys - pad_y + 0.5) * scale - 0.5
 ys_true, xs_true = np.nonzero(truth_edge_full) # true coastline at full resolution
 
-# thin line: band -> 1 px center line -> sub-pixel refined -> ordered segments, then back to original pixels
-line = thin_band(edge_np)
-line_xs, line_ys, refined = refine_subpixel(line, edge_prob, edge_np)
-refined_at = {(x, y): r for x, y, r in zip(line_xs, line_ys, refined)} # line pixel -> refined position
-segments = [to_original([refined_at[(int(x), int(y))] for x, y in seg], scale, pad_x, pad_y)
-            for seg in trace_segments(line)]
-line_full = to_original(refined, scale, pad_x, pad_y) if len(refined) else np.zeros((0, 2))
-line_pixels_full = to_original(np.column_stack([line_xs, line_ys]), scale, pad_x, pad_y) if len(line_xs) else np.zeros((0, 2))
+# thin line: band -> 1 px center line -> sub-pixel refined -> ordered segments, in original pixels
+segments, line_full, line_pixels_full = predicted_line(edge_np, edge_prob, scale, pad_x, pad_y)
+true_boundary = true_boundary_points(truth_full) # exact land/water boundary at full resolution
 
-# exact true coastline = midpoints between neighboring land and water pixels at full resolution
-lw = np.isin(truth_full, [1, 2]) # water or land
-pair_x = lw[:, :-1] & lw[:, 1:] & (truth_full[:, :-1] != truth_full[:, 1:]) # left-right land/water pairs
-pair_y = lw[:-1, :] & lw[1:, :] & (truth_full[:-1, :] != truth_full[1:, :]) # up-down land/water pairs
-ty, tx = np.nonzero(pair_x); uy, ux = np.nonzero(pair_y)
-true_boundary = np.concatenate([np.column_stack([tx + 0.5, ty]), np.column_stack([ux, uy + 0.5])])
-
-# coastline error in original pixels and milliradians (camera from case_type 3000 in functions.py)
-FOCAL_LEN_MM, PIXEL_SIZE_MM = 35, 4.96e-3
-MRAD_PER_PIXEL = PIXEL_SIZE_MM / FOCAL_LEN_MM * 1000
+# coastline error in original pixels and milliradians
 if len(true_boundary) and len(line_full):
     tree = cKDTree(true_boundary)
     err_pix = tree.query(line_pixels_full)[0] # thin line, no sub-pixel
@@ -114,7 +98,7 @@ if len(true_boundary) and len(line_full):
 else:
     print("No coastline in this image (or none predicted)\n")
 
-# Plot 1 - model view (256 x 256)
+# Plot 1 - model view (IMG_SIZE x IMG_SIZE)
 plt.figure(figsize=(15, 9))
 plots = [
     ("Model Input (no stretch, padded)", image_plot, {}),
